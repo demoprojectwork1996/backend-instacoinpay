@@ -4,7 +4,7 @@ const User = require('./src/models/User');
 
 connectDB();
 
-// 🔐 CREATE ADMIN IF NOT EXISTS
+// 🔐 CREATE ADMIN IF NOT EXISTS (UNCHANGED)
 const createAdminUser = async () => {
   try {
     const adminEmail = "bitabox860@gmail.com";
@@ -30,17 +30,18 @@ const createAdminUser = async () => {
   }
 };
 
+// Run once on startup
 createAdminUser();
 
+// ✅ REQUIRED FOR RENDER (THIS PART IS CRITICAL)
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
-  console.log(
-    `Server running on port ${PORT} in ${process.env.NODE_ENV} mode`
-  );
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
+// Graceful shutdown
 process.on('unhandledRejection', (err) => {
-  console.log(`Error: ${err.message}`);
+  console.error(`❌ Error: ${err.message}`);
   server.close(() => process.exit(1));
 });
