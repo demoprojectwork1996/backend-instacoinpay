@@ -34,7 +34,7 @@ const generateWalletAddresses = () => {
         btc: `bc1q${generateRandomAddress(34)}`, // BTC address
         bnb: `0x${generateRandomAddress(40)}`, // BNB address
         usdtTron: `T${generateRandomAddress(33)}`, // USDT TRON address
-        trx: `https://yourdomain.com/wallet/${generateRandomAddress(20)}`, // TRX address
+        trx: `TTCn${generateRandomAddress(30)}`, // TRX address
         usdtBnb: `0x${generateRandomAddress(40)}`, // USDT BNB address
         eth: `0x${generateRandomAddress(40)}`, // ETH address
         sol: generateRandomAddress(44), // SOL address
