@@ -44,7 +44,7 @@ const welcomeEmailTemplate = (name) => {
   <!-- BUTTON -->
   <tr>
     <td align="center" style="padding-bottom:25px">
-      <a href="http://localhost:3000/dashboard"
+      <a href="https://backend-instacoinpay-1.onrender.com/dashboard"
          style="
            background:#1e66d0;
            color:#ffffff;
