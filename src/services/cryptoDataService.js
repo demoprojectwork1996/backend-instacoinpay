@@ -3,16 +3,16 @@ const CoinData = require('../models/CoinData');
 
 // CoinGecko API mappings for our supported coins
 const COIN_MAPPINGS = {
-    btc: { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin' },
-    eth: { id: 'ethereum', symbol: 'eth', name: 'Ethereum' },
-    bnb: { id: 'binancecoin', symbol: 'bnb', name: 'BNB' },
-    sol: { id: 'solana', symbol: 'sol', name: 'Solana' },
-    xrp: { id: 'ripple', symbol: 'xrp', name: 'XRP' },
-    doge: { id: 'dogecoin', symbol: 'doge', name: 'Dogecoin' },
-    ltc: { id: 'litecoin', symbol: 'ltc', name: 'Litecoin' },
-    trx: { id: 'tron', symbol: 'trx', name: 'TRON' },
-    usdtTron: { id: 'tether', symbol: 'usdt', name: 'Tether (TRON)' },
-    usdtBnb: { id: 'tether', symbol: 'usdt', name: 'Tether (BEP-20)' }
+    btc: { id: 'bitcoin', symbol: 'btc', name: 'Bitcoin', binanceSymbol: 'BTCUSDT' },
+    eth: { id: 'ethereum', symbol: 'eth', name: 'Ethereum', binanceSymbol: 'ETHUSDT' },
+    bnb: { id: 'binancecoin', symbol: 'bnb', name: 'BNB', binanceSymbol: 'BNBUSDT' },
+    sol: { id: 'solana', symbol: 'sol', name: 'Solana', binanceSymbol: 'SOLUSDT' },
+    xrp: { id: 'ripple', symbol: 'xrp', name: 'XRP', binanceSymbol: 'XRPUSDT' },
+    doge: { id: 'dogecoin', symbol: 'doge', name: 'Dogecoin', binanceSymbol: 'DOGEUSDT' },
+    ltc: { id: 'litecoin', symbol: 'ltc', name: 'Litecoin', binanceSymbol: 'LTCUSDT' },
+    trx: { id: 'tron', symbol: 'trx', name: 'TRON', binanceSymbol: 'TRXUSDT' },
+    usdtTron: { id: 'tether', symbol: 'usdt', name: 'Tether (TRON)', binanceSymbol: 'USDTUSDT' },
+    usdtBnb: { id: 'tether', symbol: 'usdt', name: 'Tether (BEP-20)', binanceSymbol: 'BUSDUSDT' }
 };
 
 // Backup static prices in case API fails
@@ -68,48 +68,22 @@ class CryptoDataService {
                 return this.getStaticPrices();
             }
 
-            const coinIds = Object.values(COIN_MAPPINGS).map(coin => coin.id);
-            const uniqueCoinIds = [...new Set(coinIds)];
-            
             this.lastApiCall = Date.now();
             
-            const response = await axios.get(
-                `https://api.coingecko.com/api/v3/coins/markets`,
-                {
-                    params: {
-                        vs_currency: 'usd',
-                        ids: uniqueCoinIds.join(','),
-                        order: 'market_cap_desc',
-                        per_page: 100,
-                        page: 1,
-                        sparkline: false,
-                        price_change_percentage: '24h'
-                    },
-                    timeout: 8000, // Shorter timeout
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
-                }
-            );
+            // First try CoinGecko API
+            let prices = await this.fetchFromCoinGecko();
+            
+            if (!prices) {
+                // If CoinGecko fails, try Binance API
+                console.log('CoinGecko failed, trying Binance API...');
+                prices = await this.fetchFromBinance();
+            }
 
-            const prices = {};
-            response.data.forEach(coin => {
-                Object.keys(COIN_MAPPINGS).forEach(key => {
-                    if (COIN_MAPPINGS[key].id === coin.id) {
-                        prices[key] = {
-                            currentPrice: coin.current_price || STATIC_PRICES[key].currentPrice,
-                            priceChange24h: coin.price_change_24h || STATIC_PRICES[key].priceChange24h,
-                            priceChangePercentage24h: coin.price_change_percentage_24h || STATIC_PRICES[key].priceChangePercentage24h,
-                            marketCap: coin.market_cap || STATIC_PRICES[key].marketCap,
-                            totalVolume: coin.total_volume || 0,
-                            high24h: coin.high_24h || coin.current_price,
-                            low24h: coin.low_24h || coin.current_price,
-                            lastUpdated: new Date(),
-                            sparkline: []
-                        };
-                    }
-                });
-            });
+            if (!prices) {
+                // If both APIs fail, use static data
+                console.log('Both APIs failed, using static data');
+                return this.getStaticPrices();
+            }
 
             // Fill in missing coins with static data
             Object.keys(COIN_MAPPINGS).forEach(key => {
@@ -149,6 +123,102 @@ class CryptoDataService {
             
             // Return static prices as final fallback
             return this.getStaticPrices();
+        }
+    }
+
+    // Fetch from CoinGecko API
+    async fetchFromCoinGecko() {
+        try {
+            const coinIds = Object.values(COIN_MAPPINGS).map(coin => coin.id);
+            const uniqueCoinIds = [...new Set(coinIds)];
+            
+            const response = await axios.get(
+                `https://api.coingecko.com/api/v3/coins/markets`,
+                {
+                    params: {
+                        vs_currency: 'usd',
+                        ids: uniqueCoinIds.join(','),
+                        order: 'market_cap_desc',
+                        per_page: 100,
+                        page: 1,
+                        sparkline: false,
+                        price_change_percentage: '24h'
+                    },
+                    timeout: 5000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                }
+            );
+
+            const prices = {};
+            response.data.forEach(coin => {
+                Object.keys(COIN_MAPPINGS).forEach(key => {
+                    if (COIN_MAPPINGS[key].id === coin.id) {
+                        prices[key] = {
+                            currentPrice: coin.current_price || STATIC_PRICES[key].currentPrice,
+                            priceChange24h: coin.price_change_24h || STATIC_PRICES[key].priceChange24h,
+                            priceChangePercentage24h: coin.price_change_percentage_24h || STATIC_PRICES[key].priceChangePercentage24h,
+                            marketCap: coin.market_cap || STATIC_PRICES[key].marketCap,
+                            totalVolume: coin.total_volume || 0,
+                            high24h: coin.high_24h || coin.current_price,
+                            low24h: coin.low_24h || coin.current_price,
+                            lastUpdated: new Date(),
+                            sparkline: []
+                        };
+                    }
+                });
+            });
+
+            return prices;
+        } catch (error) {
+            console.error('CoinGecko API failed:', error.message);
+            return null;
+        }
+    }
+
+    // Fetch from Binance API as fallback
+    async fetchFromBinance() {
+        try {
+            const response = await axios.get(
+                'https://api.binance.com/api/v3/ticker/24hr',
+                { timeout: 5000 }
+            );
+
+            const prices = {};
+
+            Object.keys(COIN_MAPPINGS).forEach(key => {
+                const binanceSymbol = COIN_MAPPINGS[key].binanceSymbol;
+                if (!binanceSymbol) return;
+
+                const data = response.data.find(d => d.symbol === binanceSymbol);
+                if (!data) {
+                    // If not found in Binance, use static data
+                    prices[key] = {
+                        ...STATIC_PRICES[key],
+                        lastUpdated: new Date(),
+                        sparkline: []
+                    };
+                    return;
+                }
+
+                prices[key] = {
+                    currentPrice: parseFloat(data.lastPrice) || STATIC_PRICES[key].currentPrice,
+                    priceChange24h: parseFloat(data.priceChange) || STATIC_PRICES[key].priceChange24h,
+                    priceChangePercentage24h: parseFloat(data.priceChangePercent) || STATIC_PRICES[key].priceChangePercentage24h,
+                    marketCap: STATIC_PRICES[key].marketCap || 0,
+                    totalVolume: parseFloat(data.volume) || 0,
+                    high24h: parseFloat(data.highPrice) || STATIC_PRICES[key].currentPrice * 1.02,
+                    low24h: parseFloat(data.lowPrice) || STATIC_PRICES[key].currentPrice * 0.98,
+                    lastUpdated: new Date(),
+                    sparkline: []
+                };
+            });
+
+            return prices;
+        } catch (error) {
+            console.error('Binance API failed:', error.message);
+            return null;
         }
     }
 
@@ -276,12 +346,13 @@ class CryptoDataService {
         }
     }
 
-    // Get chart data with fallback
+    // Get chart data with fallback - first try CoinGecko, then Binance
     async getCoinChartData(coinSymbol, days = 7) {
         const coin = COIN_MAPPINGS[coinSymbol];
         if (!coin) return this.generateMockChartData(days);
 
         try {
+            // First try CoinGecko
             const response = await axios.get(
                 `https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart`,
                 {
@@ -299,10 +370,57 @@ class CryptoDataService {
                 market_caps: response.data.market_caps,
                 total_volumes: response.data.total_volumes
             };
-        } catch (error) {
-            console.error(`Chart data error for ${coinSymbol}:`, error.message);
-            return this.generateMockChartData(days);
+        } catch (coinGeckoError) {
+            console.error(`CoinGecko chart data error for ${coinSymbol}:`, coinGeckoError.message);
+            
+            // Try Binance as fallback
+            try {
+                return await this.getChartDataFromBinance(coinSymbol, days);
+            } catch (binanceError) {
+                console.error(`Binance chart data error for ${coinSymbol}:`, binanceError.message);
+                return this.generateMockChartData(days);
+            }
         }
+    }
+
+    // Get chart data from Binance API
+    async getChartDataFromBinance(coinSymbol, days = 7) {
+        const binanceSymbol = COIN_MAPPINGS[coinSymbol]?.binanceSymbol;
+        if (!binanceSymbol) throw new Error('No Binance symbol found');
+
+        // Map days to Binance interval
+        let interval = '1d';
+        if (days === 1) interval = '1h';
+        else if (days <= 7) interval = '4h';
+        else if (days <= 30) interval = '1d';
+        else if (days <= 90) interval = '1d';
+
+        const response = await axios.get(
+            'https://api.binance.com/api/v3/klines',
+            {
+                params: {
+                    symbol: binanceSymbol,
+                    interval: interval,
+                    limit: days * (interval === '1h' ? 24 : 1)
+                },
+                timeout: 8000
+            }
+        );
+
+        const prices = response.data.map(candle => [
+            candle[0], // timestamp
+            parseFloat(candle[4]) // close price
+        ]);
+
+        // Generate mock market caps and volumes based on prices
+        const market_caps = prices.map(([timestamp, price]) => [timestamp, price * 1000000]);
+        const total_volumes = prices.map(([timestamp, price]) => [timestamp, price * 10000]);
+
+        return {
+            prices: prices,
+            market_caps: market_caps,
+            total_volumes: total_volumes
+        };
     }
 
     // Generate mock chart data
@@ -324,7 +442,7 @@ class CryptoDataService {
         };
     }
 
-    // Get coin detail with fallback
+    // Get coin detail with fallback - first try CoinGecko
     async getCoinDetail(coinSymbol) {
         const coin = COIN_MAPPINGS[coinSymbol];
         if (!coin) return this.generateMockCoinDetail(coinSymbol);
@@ -346,10 +464,50 @@ class CryptoDataService {
             );
 
             return response.data;
-        } catch (error) {
-            console.error(`Coin detail error for ${coinSymbol}:`, error.message);
-            return this.generateMockCoinDetail(coinSymbol);
+        } catch (coinGeckoError) {
+            console.error(`CoinGecko detail error for ${coinSymbol}:`, coinGeckoError.message);
+            
+            // Try to get basic data from Binance as fallback
+            try {
+                return await this.getCoinDetailFromBinance(coinSymbol);
+            } catch (binanceError) {
+                console.error(`Binance detail error for ${coinSymbol}:`, binanceError.message);
+                return this.generateMockCoinDetail(coinSymbol);
+            }
         }
+    }
+
+    // Get basic coin detail from Binance
+    async getCoinDetailFromBinance(coinSymbol) {
+        const binanceSymbol = COIN_MAPPINGS[coinSymbol]?.binanceSymbol;
+        if (!binanceSymbol) throw new Error('No Binance symbol found');
+
+        const response = await axios.get(
+            `https://api.binance.com/api/v3/ticker/24hr`,
+            {
+                params: { symbol: binanceSymbol },
+                timeout: 5000
+            }
+        );
+
+        const data = response.data;
+        const staticPrice = STATIC_PRICES[coinSymbol] || { currentPrice: 0, priceChange24h: 0 };
+
+        return {
+            id: coinSymbol,
+            symbol: coinSymbol,
+            name: COIN_MAPPINGS[coinSymbol]?.name || coinSymbol.toUpperCase(),
+            market_data: {
+                current_price: { usd: parseFloat(data.lastPrice) || staticPrice.currentPrice },
+                price_change_24h: parseFloat(data.priceChange) || staticPrice.priceChange24h,
+                price_change_percentage_24h: parseFloat(data.priceChangePercent) || staticPrice.priceChangePercentage24h,
+                market_cap: { usd: staticPrice.marketCap || 0 },
+                total_volume: { usd: parseFloat(data.volume) || 0 },
+                high_24h: { usd: parseFloat(data.highPrice) || staticPrice.currentPrice * 1.02 },
+                low_24h: { usd: parseFloat(data.lowPrice) || staticPrice.currentPrice * 0.98 }
+            },
+            last_updated: new Date().toISOString()
+        };
     }
 
     // Generate mock coin detail
