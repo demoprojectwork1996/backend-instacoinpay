@@ -93,7 +93,7 @@ app.options(
 
 
 // ✅ SINGLE preflight handler (VERY IMPORTANT)
-app.options("*", cors());
+
 
 /* =========================
    RATE LIMITING
