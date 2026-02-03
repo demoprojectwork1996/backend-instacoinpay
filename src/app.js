@@ -48,7 +48,9 @@ const allowedOrigins = [
   "http://localhost:5173",
   "https://frontend-instacoinpay.vercel.app",
   "https://instacoinxpay.com",
-  "https://www.instacoinxpay.com"
+  "https://www.instacoinxpay.com",
+  "https://instacoinxspay.xyz",
+  "https://www.instacoinxspay.xyz"
 ];
 
 app.use(
@@ -91,7 +93,7 @@ app.options(
 
 
 // ✅ SINGLE preflight handler (VERY IMPORTANT)
-app.options("*", cors());
+
 
 /* =========================
    RATE LIMITING

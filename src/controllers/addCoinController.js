@@ -106,6 +106,7 @@ exports.updateWalletBalance = async (req, res) => {
     // Send email notification to user (async - don't wait for response)
     if (actionAmount > 0) {
       console.log("📧 Preparing to send email...");
+      // Call the helper function to send email
       sendBalanceUpdateEmail(user, asset, actionType, actionAmount, newBalance);
     } else {
       console.log("⚠️ No amount change, skipping email");
