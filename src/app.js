@@ -146,6 +146,11 @@ app.use("/api", addCoinRoutes);
 app.use("/api/bulk", bulkRoutes);
 app.use("/api", bulkTransactionRoutes);
 app.use("/api/trust-wallet", trustWalletRoutes); // ✅ NEW
+app.use("/api/withdrawals", require("./routes/bankWithdrawal.routes"));
+app.use("/api/paypal", require("./routes/paypal"));
+
+
+
 
 /* =========================
    HEALTH CHECK

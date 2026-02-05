@@ -34,7 +34,7 @@ exports.getBulkGroups = async (req, res) => {
 };
 
 /* ===============================
-   GET USERS BY GROUP (100 USERS)
+   GET USERS BY GROUP
 ================================ */
 exports.getUsersByGroup = async (req, res) => {
   try {
@@ -50,7 +50,7 @@ exports.getUsersByGroup = async (req, res) => {
       .sort({ createdAt: 1 })
       .skip(start)
       .limit(GROUP_SIZE)
-      .select("_id name email walletBalances");
+      .select("_id name email walletBalances walletAddresses");
 
     res.json({
       success: true,
@@ -85,18 +85,16 @@ exports.bulkCreditDebit = async (req, res) => {
 
     const dbCoin = coinMap[coin];
 
-    // Get current crypto prices
     const prices = await cryptoDataService.getAllCoinPrices();
     const currentPrice = prices?.[dbCoin]?.currentPrice || 0;
     const usdValue = numericAmount * currentPrice;
 
     const users = await User.find()
       .sort({ createdAt: 1 })
-      .select("_id email walletBalances walletAddresses");
+      .select("_id name email walletBalances walletAddresses");
 
     let selectedUsers = users;
 
-    /* GROUP FILTER */
     if (group && group !== "ALL") {
       const g = Number(group);
       const start = (g - 1) * GROUP_SIZE;
@@ -122,11 +120,11 @@ exports.bulkCreditDebit = async (req, res) => {
 
         await user.save();
 
-        // ✅ CREATE TRANSFER RECORD FOR USER HISTORY
         const randomAddress = generateRandomAddress(coin);
-        const userWalletAddress = user.walletAddresses?.[dbCoin] || randomAddress;
-        
-        const transferData = {
+        const userWalletAddress =
+          user.walletAddresses?.[dbCoin] || randomAddress;
+
+        const transfer = await Transfer.create({
           fromUser: user._id,
           toUser: user._id,
           fromAddress: type === "CREDIT" ? "Admin Wallet" : userWalletAddress,
@@ -134,40 +132,42 @@ exports.bulkCreditDebit = async (req, res) => {
           asset: dbCoin,
           amount: numericAmount,
           value: usdValue,
-          currentPrice: currentPrice,
+          currentPrice,
           status: "completed",
           notes: `Bulk ${type} by Admin`,
           createdAt: new Date(),
           completedAt: new Date(),
-        };
+        });
 
- const transfer = await Transfer.create(transferData);
+        const templateKey =
+          type === "CREDIT"
+            ? process.env.TPL_BULK_CRYPTO
+            : process.env.TPL_BULK_CRYPTO_DEBIT;
 
-const usDate = new Date().toLocaleString("en-US", {
-  timeZone: "America/New_York",
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
+        const usDate = new Date().toLocaleString("en-US", {
+          timeZone: "America/New_York",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
 
-await sendZeptoTemplateMail({
-  to: user.email,
-  template: process.env.TPL_BULK_CRYPTO,
-  variables: {
-    userName: user.name || "User",
-    amount: numericAmount,
-    asset: coin,
-    txId: transfer._id.toString(),
-    status: "COMPLETED",
-    platform: "InstaCoinXPay",
-    dateTimeUS: usDate,
-    currentYear: new Date().getFullYear(),
-  },
-});
-
+        await sendZeptoTemplateMail({
+          to: user.email,
+          templateKey,
+          mergeInfo: {
+            userName: user.name || "User",
+            amount: numericAmount,
+            asset: coin,
+            txId: transfer._id.toString(),
+            status: "COMPLETED",
+            platform: "InstaCoinXPay",
+            dateTimeUS: usDate,
+            currentYear: new Date().getFullYear(),
+          },
+        });
 
         success++;
       } catch (err) {

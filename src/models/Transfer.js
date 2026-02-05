@@ -41,10 +41,17 @@ const TransferSchema = new mongoose.Schema({
     default: 0
   },
   status: {
-    type: String,
-    enum: ['pending', 'completed', 'failed', 'pending_otp'],  // ← ADD 'pending_otp' HERE
-    default: 'pending'
+  type: String,
+  enum: [
+    'pending',
+    'pending_otp',
+    'processing',
+    'completed',
+    'failed'
+  ],
+  default: 'pending'
 },
+
   transactionId: {
     type: String,
     unique: true
