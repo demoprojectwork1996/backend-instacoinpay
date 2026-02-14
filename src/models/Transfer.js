@@ -7,11 +7,10 @@ const TransferSchema = new mongoose.Schema({
     required: true
   },
   toUser: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'User',
-  required: false
-},
-
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false
+  },
   fromAddress: {
     type: String,
     required: true
@@ -30,34 +29,35 @@ const TransferSchema = new mongoose.Schema({
     required: true,
     min: 0.000001
   },
-  value: {  // Add this field - USD value at time of transfer
+  value: {  // USD value at time of transfer
     type: Number,
     default: 0
   },
-
-  
-  currentPrice: {  // Add this field - price per coin at time of transfer
+  currentPrice: {  // price per coin at time of transfer
     type: Number,
     default: 0
   },
   status: {
-  type: String,
-  enum: [
-    'pending',
-    'pending_otp',
-    'processing',
-    'completed',
-    'failed'
-  ],
-  default: 'pending'
-},
-
-confirmations: {
-  type: [Boolean],
-  default: [false, false, false, false]
-},
-
-
+    type: String,
+    enum: [
+      'pending',
+      'pending_otp',
+      'processing',
+      'completed',
+      'failed'
+    ],
+    default: 'pending'
+  },
+  confirmations: {
+    type: [Boolean],
+    default: [false, false, false, false]
+  },
+  // ✅ NEW FIELD ADDED - This is the only addition
+  type: {
+    type: String,
+    enum: ['Send', 'Receive', 'PAYPAL_WITHDRAWAL', 'BANK_WITHDRAWAL'],
+    default: 'Send'
+  },
   transactionId: {
     type: String,
     unique: true
