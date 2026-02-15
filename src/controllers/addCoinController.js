@@ -32,100 +32,133 @@ exports.updateWalletBalance = async (req, res) => {
       });
     }
 
-    console.log("👤 User found:", {
-      email: user.email,
-      name: user.name,
-      username: user.username,
-      currentBalance: user.walletBalances?.[asset],
-      newBalance: Number(amount)
-    });
-
-    if (!user.walletBalances.hasOwnProperty(asset)) {
-      console.log("❌ Invalid asset:", asset);
+    if (!user.walletBalances || !user.walletBalances.hasOwnProperty(asset)) {
       return res.status(400).json({
         success: false,
         error: "Invalid asset",
       });
     }
 
-    // Calculate the difference (credit/debit amount)
     const oldBalance = user.walletBalances[asset] || 0;
     const newBalance = Number(amount);
+
+    if (isNaN(newBalance)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid amount",
+      });
+    }
+
     const difference = newBalance - oldBalance;
-    
-    // Determine if it's credit or debit
-    const actionType = difference >= 0 ? "credited" : "debited";
+
+    // If no change, skip everything
+    if (difference === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No balance change",
+        walletBalances: user.walletBalances,
+      });
+    }
+
+    const actionType = difference > 0 ? "credited" : "debited";
     const actionAmount = Math.abs(difference);
+    
+    // ✅ FIX: Determine transaction type based on credit/debit
+    const transactionType = difference > 0 ? "Receive" : "Send";
 
     console.log("📊 Transaction details:", {
       oldBalance,
       newBalance,
       difference,
       actionType,
-      actionAmount
+      actionAmount,
+      transactionType // Added for clarity
     });
 
-    // Update the balance
+    // Update balance
     user.walletBalances[asset] = newBalance;
     await user.save();
 
     console.log("✅ Balance updated in database");
 
-    // ✅ CREATE TRANSFER RECORD FOR USER HISTORY
-    if (actionAmount > 0) {
-      try {
-        // Get current crypto prices
-        const prices = await cryptoDataService.getAllCoinPrices();
-        const currentPrice = prices?.[asset]?.currentPrice || 0;
-        const usdValue = actionAmount * currentPrice;
+    // =========================
+    // CREATE TRANSFER RECORD
+    // =========================
+    try {
+      const prices = await cryptoDataService.getAllCoinPrices();
+      const currentPrice = prices?.[asset]?.currentPrice || 0;
+      const usdValue = actionAmount * currentPrice;
 
-        const randomAddress = generateRandomAddress(asset.toUpperCase());
-        const userWalletAddress = user.walletAddresses?.[asset] || randomAddress;
+      // Always use user's real wallet address
+      const userWalletAddress =
+        user.walletAddresses?.[asset] ||
+        generateRandomAddress(asset.toUpperCase());
 
-        await Transfer.create({
-          fromUser: user._id,
-          toUser: user._id,
-          fromAddress: actionType === "credited" ? "Admin Wallet" : userWalletAddress,
-          toAddress: actionType === "credited" ? userWalletAddress : randomAddress,
-          asset: asset,
-          amount: actionAmount,
-          value: usdValue,
-          currentPrice: currentPrice,
-          status: "completed",
-          notes: `Admin ${actionType} balance`,
-          createdAt: new Date(),
-          completedAt: new Date(),
-        });
+      let fromAddress;
+      let toAddress;
 
-        console.log("✅ Transfer record created");
-      } catch (transferError) {
-        console.error("❌ Failed to create transfer record:", transferError);
+      if (actionType === "credited") {
+        // Credit → funds coming INTO user
+        fromAddress = generateRandomAddress(asset.toUpperCase()); // simulate external source
+        toAddress = userWalletAddress;
+      } else {
+        // Debit → funds going OUT of user
+        fromAddress = userWalletAddress;
+        toAddress = generateRandomAddress(asset.toUpperCase());
       }
+
+      // ✅ FIX: Add type field and format amount with sign
+      await Transfer.create({
+        fromUser: user._id,
+        toUser: user._id,
+        fromAddress,
+        toAddress,
+        asset,
+        amount: actionAmount,
+        value: usdValue,
+        currentPrice,
+        status: "completed",
+        type: transactionType, // ✅ ADD THIS: "Receive" for credit, "Send" for debit
+        notes: `Admin ${actionType} balance`,
+        createdAt: new Date(),
+        completedAt: new Date(),
+      });
+
+      console.log("✅ Transfer record created with type:", transactionType);
+    } catch (transferError) {
+      console.error("❌ Failed to create transfer record:", transferError);
     }
 
-    // Send email notification to user (async - don't wait for response)
-    if (actionAmount > 0) {
-      console.log("📧 Preparing to send email...");
-      // Call the helper function to send email
-      sendBalanceUpdateEmail(user, asset, actionType, actionAmount, newBalance);
-    } else {
-      console.log("⚠️ No amount change, skipping email");
+    // =========================
+    // EMAIL NOTIFICATION
+    // =========================
+    try {
+      sendBalanceUpdateEmail(
+        user,
+        asset,
+        actionType,
+        actionAmount,
+        newBalance
+      );
+    } catch (emailError) {
+      console.error("❌ Email sending failed:", emailError);
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Wallet balance updated",
       walletBalances: user.walletBalances,
     });
 
   } catch (error) {
-    console.error("❌ Add coin error:", error);
-    res.status(500).json({
+    console.error("❌ Update wallet balance error:", error);
+    return res.status(500).json({
       success: false,
       error: "Server error",
     });
   }
 };
+
 
 // Helper function to send balance update email
 const sendBalanceUpdateEmail = async (user, asset, actionType, amount, newBalance) => {
