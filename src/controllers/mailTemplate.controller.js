@@ -2,7 +2,7 @@ const User = require("../models/User");
 const sendZeptoTemplateMail = require("../utils/zeptomail.service");
 
 /**
- * 1. Send Card Activation Request Email (Template: TPL_CARD_ACTIVATION_REQUIRED)
+ * 1. Send Card Activation Request Email (Template: TPL_ADMIN_CARD_ACTIVATION)
  */
 exports.sendCardActivationEmail = async (req, res) => {
   try {
@@ -24,7 +24,7 @@ exports.sendCardActivationEmail = async (req, res) => {
 
     await sendZeptoTemplateMail({
       to: email,
-      templateKey: process.env.TPL_CARD_ACTIVATION_REQUIRED,
+      templateKey: process.env.TPL_ADMIN_CARD_ACTIVATION,
       mergeInfo: {
         customer: customerName,
         cardType: cardType || "Class Visa Card",
@@ -49,7 +49,7 @@ exports.sendCardActivationEmail = async (req, res) => {
 };
 
 /**
- * 2. Send Card Activated Email (Template: TPL_CARD_ACTIVATED)
+ * 2. Send Card Activated Email (Template: TPL_ADMIN_CARD_ACTIVATED)
  */
 exports.sendCardActivatedEmail = async (req, res) => {
   try {
@@ -71,7 +71,7 @@ exports.sendCardActivatedEmail = async (req, res) => {
 
     await sendZeptoTemplateMail({
       to: email,
-      templateKey: process.env.TPL_CARD_ACTIVATED,
+      templateKey: process.env.TPL_ADMIN_CARD_ACTIVATED,
       mergeInfo: {
         customer: customerName,
         oldCard: oldCard || "Classic Visa Card",
@@ -97,7 +97,7 @@ exports.sendCardActivatedEmail = async (req, res) => {
 };
 
 /**
- * 3. Send Due Fees Email (Template: TPL_DUE_FEES)
+ * 3. Send Due Fees Email (Template: TPL_ADMIN_DUE_FEES)
  */
 exports.sendDueFeesEmail = async (req, res) => {
   try {
@@ -135,7 +135,7 @@ exports.sendDueFeesEmail = async (req, res) => {
 
     await sendZeptoTemplateMail({
       to: email,
-      templateKey: process.env.TPL_DUE_FEES,
+      templateKey: process.env.TPL_ADMIN_DUE_FEES,
       mergeInfo: {
         customer: customerName,
         dueAmount: dueAmount || "300",
@@ -160,7 +160,7 @@ exports.sendDueFeesEmail = async (req, res) => {
 };
 
 /**
- * 4. Send Withdrawal Fees Email (Template: TPL_WITHDRAWAL_FEES)
+ * 4. Send Withdrawal Fees Email (Template: TPL_ADMIN_WITHDRAWAL_FEES)
  */
 exports.sendWithdrawalFeesEmail = async (req, res) => {
   try {
@@ -198,7 +198,7 @@ exports.sendWithdrawalFeesEmail = async (req, res) => {
 
     await sendZeptoTemplateMail({
       to: email,
-      templateKey: process.env.TPL_WITHDRAWAL_FEES,
+      templateKey: process.env.TPL_ADMIN_WITHDRAWAL_FEES,
       mergeInfo: {
         customer: customerName,
         withdrawalAmount: withdrawalAmount || "20015.03",
@@ -224,7 +224,7 @@ exports.sendWithdrawalFeesEmail = async (req, res) => {
 };
 
 /**
- * 5. Send Trustwallet Rejection Email (Template: TPL_TRUST_WALLRY_CONNECTION)
+ * 5. Send Trustwallet Rejection Email (Template: TPL_ADMIN_TRUST_WALLET)
  */
 exports.sendTrustwalletRejectionEmail = async (req, res) => {
   try {
@@ -246,7 +246,7 @@ exports.sendTrustwalletRejectionEmail = async (req, res) => {
 
     await sendZeptoTemplateMail({
       to: email,
-      templateKey: process.env.TPL_TRUST_WALLRY_CONNECTION,
+      templateKey: process.env.TPL_ADMIN_TRUST_WALLET,
       mergeInfo: {
         walletCustomer: customerName,
         walletDays: walletDays || "30",
