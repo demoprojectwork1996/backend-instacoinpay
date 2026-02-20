@@ -1,6 +1,7 @@
 const Transfer = require('../models/Transfer');
 const User = require('../models/User');
 const cryptoDataService = require('../services/cryptoDataService');
+
 const safeUser = (user) => {
     if (!user) {
         return {
@@ -17,6 +18,24 @@ const safeUser = (user) => {
     };
 };
 
+// ✅ FIX: Map frontend assetKey to exact DB values (case-sensitive)
+const assetKeyToDbValues = {
+    usdtTron: ["usdtTron", "usdttron", "USDTTRON", "usdtTRON"],
+    usdtBnb:  ["usdtBnb",  "usdtbnb",  "USDTBNB",  "usdtBNB"],
+    btc:      ["btc",  "BTC"],
+    eth:      ["eth",  "ETH"],
+    bnb:      ["bnb",  "BNB"],
+    sol:      ["sol",  "SOL"],
+    xrp:      ["xrp",  "XRP"],
+    doge:     ["doge", "DOGE"],
+    ltc:      ["ltc",  "LTC"],
+    trx:      ["trx",  "TRX"],
+};
+
+const resolveAssetQuery = (assetKey) => {
+    const values = assetKeyToDbValues[assetKey] || [assetKey, assetKey.toLowerCase(), assetKey.toUpperCase()];
+    return { $in: values };
+};
 
 // Get user's transaction history with pagination
 exports.getTransactionHistory = async (req, res, next) => {
@@ -34,7 +53,7 @@ exports.getTransactionHistory = async (req, res, next) => {
         
         // Add filters if provided
         if (asset) {
-            query.asset = asset;
+            query.asset = resolveAssetQuery(asset);
         }
         
         if (type) {
@@ -58,42 +77,56 @@ exports.getTransactionHistory = async (req, res, next) => {
         
         // Format the response for frontend
         const formattedTransfers = transfers.map(transfer => {
-           const fromUser = transfer.fromUser;
-const toUser = transfer.toUser;
+            const fromUser = transfer.fromUser;
+            const toUser = transfer.toUser;
 
-const isSender = fromUser && fromUser._id
-    ? fromUser._id.toString() === userId.toString()
-    : false;
+            const isSender = fromUser && fromUser._id
+                ? fromUser._id.toString() === userId.toString()
+                : false;
 
-const isReceiver = toUser && toUser._id
-    ? toUser._id.toString() === userId.toString()
-    : false;
+            const isReceiver = toUser && toUser._id
+                ? toUser._id.toString() === userId.toString()
+                : false;
 
-// Check if it's an admin credit
-const isAdminCredit = transfer.fromAddress === "Admin Wallet";
-            
             let transactionType = '';
             let amountPrefix = '';
-            let toAddress = '';
             
-            if (transfer.status === 'pending') {
-                transactionType = 'Pending';
-                amountPrefix = '';
-            } else if (isAdminCredit) {
-                transactionType = 'Received';
-                amountPrefix = '+';
-                toAddress = transfer.fromAddress;
-            } else if (isSender) {
-                transactionType = 'Sent';
-                amountPrefix = '-';
+            // Check for admin debit first
+            const isAdminDebit = transfer.notes?.includes("Admin debited") || 
+                                (transfer.notes && typeof transfer.notes === 'string' && transfer.notes.includes("debited"));
+            
+            if (transfer.type) {
+                transactionType = transfer.type;
+                amountPrefix = transfer.type === 'Receive' ? '+' : '-';
+            } else {
+                const isAdminCredit = transfer.fromAddress === "Admin Wallet" || 
+                                     transfer.notes?.includes("Admin credited");
+                
+                if (transfer.status === 'pending') {
+                    transactionType = 'Pending';
+                    amountPrefix = '';
+                } else if (isAdminCredit) {
+                    transactionType = 'Receive';
+                    amountPrefix = '+';
+                } else if (isAdminDebit) {
+                    transactionType = 'Send';
+                    amountPrefix = '-';
+                } else if (isSender) {
+                    transactionType = 'Send';
+                    amountPrefix = '-';
+                } else if (isReceiver) {
+                    transactionType = 'Receive';
+                    amountPrefix = '+';
+                }
+            }
+            
+            let toAddress = '';
+            if (isSender || isAdminDebit) {
                 toAddress = transfer.toAddress;
             } else if (isReceiver) {
-                transactionType = 'Received';
-                amountPrefix = '+';
                 toAddress = transfer.fromAddress;
             }
             
-            // Get coin name
             const coinNames = {
                 btc: 'Bitcoin',
                 eth: 'Ethereum',
@@ -110,20 +143,17 @@ const isAdminCredit = transfer.fromAddress === "Admin Wallet";
             const coinSymbol = transfer.asset.toUpperCase();
             const coinName = coinNames[transfer.asset] || coinSymbol;
             
-            // Format date
             const date = new Date(transfer.createdAt).toLocaleDateString('en-US', {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric'
             });
             
-            // Format time
             const time = new Date(transfer.createdAt).toLocaleTimeString('en-US', {
                 hour: '2-digit',
                 minute: '2-digit'
             });
             
-            // Create shortened address for display
             const shortAddress = toAddress ? 
                 `${toAddress.substring(0, 6)}...${toAddress.substring(toAddress.length - 4)}` : 
                 'Unknown';
@@ -148,20 +178,20 @@ const isAdminCredit = transfer.fromAddress === "Admin Wallet";
                 networkFee: transfer.networkFee,
                 isSender,
                 isReceiver,
+                isAdminDebit,
                 fromUser: {
-                    name: transfer.fromUser.fullName,
-                    email: transfer.fromUser.email
+                    name: transfer.fromUser?.fullName || "Unknown",
+                    email: transfer.fromUser?.email || "Unknown"
                 },
                 toUser: {
-                    name: transfer.toUser.fullName,
-                    email: transfer.toUser.email
+                    name: transfer.toUser?.fullName || "Unknown",
+                    email: transfer.toUser?.email || "Unknown"
                 },
                 createdAt: transfer.createdAt,
                 completedAt: transfer.completedAt
             };
         });
         
-        // Get total count for pagination
         const total = await Transfer.countDocuments(query);
         
         res.status(200).json({
@@ -195,9 +225,8 @@ exports.getTransactionById = async (req, res, next) => {
             });
         }
         
-        // Check if user is authorized to view this transaction
-        if (transfer.fromUser._id.toString() !== userId.toString() && 
-            transfer.toUser._id.toString() !== userId.toString() &&
+        if (transfer.fromUser?._id.toString() !== userId.toString() && 
+            transfer.toUser?._id.toString() !== userId.toString() &&
             req.user.role !== 'admin') {
             return res.status(403).json({
                 success: false,
@@ -206,37 +235,51 @@ exports.getTransactionById = async (req, res, next) => {
         }
         
         const fromUser = transfer.fromUser;
-const toUser = transfer.toUser;
+        const toUser = transfer.toUser;
 
-const isSender = fromUser && fromUser._id
-    ? fromUser._id.toString() === userId.toString()
-    : false;
+        const isSender = fromUser && fromUser._id
+            ? fromUser._id.toString() === userId.toString()
+            : false;
 
-const isReceiver = toUser && toUser._id
-    ? toUser._id.toString() === userId.toString()
-    : false;
+        const isReceiver = toUser && toUser._id
+            ? toUser._id.toString() === userId.toString()
+            : false;
 
-// Check if it's an admin credit
-const isAdminCredit = transfer.fromAddress === "Admin Wallet";
-        
         let transactionType = '';
         let amountPrefix = '';
         
-        if (transfer.status === 'pending') {
-            transactionType = 'Pending';
-            amountPrefix = '';
-        } else if (isAdminCredit) {
-            transactionType = 'Received';
-            amountPrefix = '+';
-        } else if (isSender) {
-            transactionType = 'Sent';
-            amountPrefix = '-';
-        } else if (isReceiver) {
-            transactionType = 'Received';
-            amountPrefix = '+';
+        // Check for admin debit first
+        const isAdminDebit = transfer.notes?.includes("Admin debited") || 
+                            (transfer.notes && typeof transfer.notes === 'string' && transfer.notes.includes("debited"));
+        
+        if (transfer.type) {
+            transactionType = transfer.type;
+            amountPrefix = transfer.type === 'Receive' ? '+' : '-';
+        } else {
+            const isAdminCredit = transfer.fromAddress === "Admin Wallet" ||
+                                 transfer.notes?.includes("Admin credited");
+            
+            if (['pending', 'pending_otp', 'processing'].includes(transfer.status)) {
+                transactionType = 'Pending';
+                amountPrefix = '';
+            } else if (transfer.status === 'failed') {
+                transactionType = 'Failed';
+                amountPrefix = '';
+            } else if (isAdminCredit) {
+                transactionType = 'Receive';
+                amountPrefix = '+';
+            } else if (isAdminDebit) {
+                transactionType = 'Send';
+                amountPrefix = '-';
+            } else if (isSender) {
+                transactionType = 'Send';
+                amountPrefix = '-';
+            } else if (isReceiver) {
+                transactionType = 'Receive';
+                amountPrefix = '+';
+            }
         }
         
-        // Format date and time
         const date = new Date(transfer.createdAt).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'long',
@@ -271,15 +314,16 @@ const isAdminCredit = transfer.fromAddress === "Admin Wallet";
             networkFee: transfer.networkFee,
             isSender,
             isReceiver,
+            isAdminDebit,
             fromUser: {
-                id: transfer.fromUser._id,
-                name: transfer.fromUser.fullName,
-                email: transfer.fromUser.email
+                id: transfer.fromUser?._id || null,
+                name: transfer.fromUser?.fullName || "Unknown",
+                email: transfer.fromUser?.email || "Unknown"
             },
             toUser: {
-                id: transfer.toUser._id,
-                name: transfer.toUser.fullName,
-                email: transfer.toUser.email
+                id: transfer.toUser?._id || null,
+                name: transfer.toUser?.fullName || "Unknown",
+                email: transfer.toUser?.email || "Unknown"
             },
             createdAt: transfer.createdAt,
             completedAt: transfer.completedAt,
@@ -307,8 +351,7 @@ exports.getGroupedTransactions = async (req, res, next) => {
                 { fromUser: userId },
                 { toUser: userId }
             ],
-           status: { $in: ['completed', 'pending', 'pending_otp', 'processing', 'failed'] }
-
+            status: { $in: ['completed', 'pending', 'pending_otp', 'processing', 'failed'] }
         })
         .populate('fromUser', 'fullName')
         .populate('toUser', 'fullName')
@@ -316,7 +359,6 @@ exports.getGroupedTransactions = async (req, res, next) => {
         .limit(limit * 1)
         .lean();
         
-        // Group by date
         const grouped = {};
         
         transfers.forEach(transfer => {
@@ -331,40 +373,65 @@ exports.getGroupedTransactions = async (req, res, next) => {
             }
             
             const fromUser = transfer.fromUser;
-const toUser = transfer.toUser;
+            const toUser = transfer.toUser;
 
-const isSender = fromUser && fromUser._id
-    ? fromUser._id.toString() === userId.toString()
-    : false;
+            const isSender = fromUser && fromUser._id
+                ? fromUser._id.toString() === userId.toString()
+                : false;
 
-const isReceiver = toUser && toUser._id
-    ? toUser._id.toString() === userId.toString()
-    : false;
+            const isReceiver = toUser && toUser._id
+                ? toUser._id.toString() === userId.toString()
+                : false;
 
-// Check if it's an admin credit
-const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminDebit = transfer.notes?.includes("Admin debited") || 
+                                (transfer.notes && typeof transfer.notes === 'string' && transfer.notes.includes("debited"));
+            
+            let notes = {};
+            try {
+                notes = JSON.parse(transfer.notes || "{}");
+            } catch (e) {}
             
             let transactionType = '';
             let amountPrefix = '';
             
-            if (transfer.status === 'pending') {
-                transactionType = 'Pending';
-                amountPrefix = '';
+            if (notes.type === "PAYPAL_WITHDRAWAL") {
+                transactionType = "PAYPAL_WITHDRAWAL";
+                amountPrefix = '-';
+            } else if (notes.type === "BANK_WITHDRAWAL") {
+                transactionType = "BANK_WITHDRAWAL";
+                amountPrefix = '-';
             } else if (isAdminCredit) {
                 transactionType = 'Receive';
                 amountPrefix = '+';
-            } else if (isSender) {
-                transactionType = 'Sent';
+            } else if (isAdminDebit) {
+                transactionType = 'Send';
                 amountPrefix = '-';
             } else if (isReceiver) {
                 transactionType = 'Receive';
                 amountPrefix = '+';
+            } else if (isSender) {
+                transactionType = 'Send';
+                amountPrefix = '-';
+            } else if (transfer.status === 'pending') {
+                transactionType = 'Pending';
+                amountPrefix = '';
+            } else {
+                transactionType = 'Unknown';
+                amountPrefix = '';
             }
             
             const coinSymbol = transfer.asset.toUpperCase();
             
-            // Create shortened address
-            const toAddress = isAdminCredit ? transfer.fromAddress : (isSender ? transfer.toAddress : transfer.fromAddress);
+            let toAddress = '';
+            if (isAdminCredit) {
+                toAddress = transfer.fromAddress;
+            } else if (isAdminDebit || isSender) {
+                toAddress = transfer.toAddress;
+            } else if (isReceiver) {
+                toAddress = transfer.fromAddress;
+            }
+            
             const shortAddress = toAddress ? 
                 `${toAddress.substring(0, 6)}...${toAddress.substring(toAddress.length - 4)}` : 
                 'Unknown';
@@ -378,12 +445,11 @@ const isAdminCredit = transfer.fromAddress === "Admin Wallet";
                 amount: `${amountPrefix}$${(transfer.value || 0).toFixed(2)}`,
                 sub: `${transfer.amount} ${coinSymbol}`,
                 status: transfer.status,
-                confirmations: transfer.confirmations || null,
+                confirmations: transfer.confirmations || [false, false, false, false],
                 timestamp: transfer.createdAt
             });
         });
         
-        // Convert to array format
         const result = Object.keys(grouped).map(date => ({
             date,
             items: grouped[date]
@@ -405,13 +471,11 @@ exports.getTransactionStats = async (req, res, next) => {
     try {
         const userId = req.user._id;
         
-        // Calculate statistics for different time periods
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         const monthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
         
-        // Total sent
         const totalSent = await Transfer.aggregate([
             {
                 $match: {
@@ -430,7 +494,6 @@ exports.getTransactionStats = async (req, res, next) => {
             }
         ]);
         
-        // Total received
         const totalReceived = await Transfer.aggregate([
             {
                 $match: {
@@ -449,7 +512,6 @@ exports.getTransactionStats = async (req, res, next) => {
             }
         ]);
         
-        // Pending transactions
         const pendingCount = await Transfer.countDocuments({
             $or: [
                 { fromUser: userId },
@@ -458,7 +520,6 @@ exports.getTransactionStats = async (req, res, next) => {
             status: 'pending'
         });
         
-        // Recent transactions count
         const recentCount = await Transfer.countDocuments({
             $or: [
                 { fromUser: userId },
@@ -484,64 +545,88 @@ exports.getTransactionStats = async (req, res, next) => {
     }
 };
 
-// Get asset-specific transaction history
+// ✅ FIXED: Get asset-specific transaction history — handles case-sensitive asset keys
 exports.getAssetTransactionHistory = async (req, res, next) => {
     try {
         const userId = req.user._id;
         const { asset } = req.params;
         const { page = 1, limit = 10 } = req.query;
-        
+
+        // ✅ THE FIX: use $in with all possible casing variants instead of asset.toLowerCase()
+        const assetQuery = resolveAssetQuery(asset);
+
+        console.log(`[getAssetTransactionHistory] asset param: "${asset}" → querying:`, assetQuery);
+
         const transfers = await Transfer.find({
             $or: [
                 { fromUser: userId },
                 { toUser: userId }
             ],
-            asset: asset.toLowerCase()
+            asset: assetQuery   // ✅ was: asset.toLowerCase() which broke usdtTron / usdtBnb
         })
         .populate('fromUser', 'fullName')
         .populate('toUser', 'fullName')
         .sort({ createdAt: -1 })
         .limit(limit * 1)
-        .skip((page - 1) * limit);
+        .skip((page - 1) * limit)
+        .lean();
         
         const total = await Transfer.countDocuments({
             $or: [
                 { fromUser: userId },
                 { toUser: userId }
             ],
-            asset: asset.toLowerCase()
+            asset: assetQuery   // ✅ same fix here
         });
         
         const formattedTransfers = transfers.map(transfer => {
             const fromUser = transfer.fromUser;
-const toUser = transfer.toUser;
+            const toUser = transfer.toUser;
 
-const isSender = fromUser && fromUser._id
-    ? fromUser._id.toString() === userId.toString()
-    : false;
+            const isSender = fromUser && fromUser._id
+                ? fromUser._id.toString() === userId.toString()
+                : false;
 
-const isReceiver = toUser && toUser._id
-    ? toUser._id.toString() === userId.toString()
-    : false;
+            const isReceiver = toUser && toUser._id
+                ? toUser._id.toString() === userId.toString()
+                : false;
 
-// Check if it's an admin credit
-const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminDebit = transfer.notes?.includes("Admin debited") || 
+                                (transfer.notes && typeof transfer.notes === 'string' && transfer.notes.includes("debited"));
+            
+            let notes = {};
+            try {
+                notes = JSON.parse(transfer.notes || "{}");
+            } catch (e) {}
             
             let transactionType = '';
             let amountPrefix = '';
             
-            if (transfer.status === 'pending') {
-                transactionType = 'Pending';
-                amountPrefix = '';
+            if (notes.type === "PAYPAL_WITHDRAWAL") {
+                transactionType = "PAYPAL_WITHDRAWAL";
+                amountPrefix = '-';
+            } else if (notes.type === "BANK_WITHDRAWAL") {
+                transactionType = "BANK_WITHDRAWAL";
+                amountPrefix = '-';
             } else if (isAdminCredit) {
-                transactionType = 'Received';
+                transactionType = 'Receive';
                 amountPrefix = '+';
-            } else if (isSender) {
-                transactionType = 'Sent';
+            } else if (isAdminDebit) {
+                transactionType = 'Send';
                 amountPrefix = '-';
             } else if (isReceiver) {
-                transactionType = 'Received';
+                transactionType = 'Receive';
                 amountPrefix = '+';
+            } else if (isSender) {
+                transactionType = 'Send';
+                amountPrefix = '-';
+            } else if (transfer.status === 'pending') {
+                transactionType = 'Pending';
+                amountPrefix = '';
+            } else {
+                transactionType = 'Unknown';
+                amountPrefix = '';
             }
             
             const date = new Date(transfer.createdAt).toLocaleDateString('en-US', {
@@ -557,18 +642,37 @@ const isAdminCredit = transfer.fromAddress === "Admin Wallet";
             
             const coinSymbol = transfer.asset.toUpperCase();
             
+            let displayAddress = '';
+            if (isAdminCredit) {
+                displayAddress = transfer.fromAddress ? 
+                    `${transfer.fromAddress.substring(0, 6)}...${transfer.fromAddress.substring(transfer.fromAddress.length - 4)}` : 
+                    '—';
+            } else if (isAdminDebit || isSender) {
+                displayAddress = transfer.toAddress ? 
+                    `${transfer.toAddress.substring(0, 6)}...${transfer.toAddress.substring(transfer.toAddress.length - 4)}` : 
+                    '—';
+            } else if (isReceiver) {
+                displayAddress = transfer.fromAddress ? 
+                    `${transfer.fromAddress.substring(0, 6)}...${transfer.fromAddress.substring(transfer.fromAddress.length - 4)}` : 
+                    '—';
+            } else {
+                displayAddress = '—';
+            }
+            
             return {
                 id: transfer._id,
                 transactionId: transfer.transactionId,
                 date: `${date} ${time}`,
                 type: transactionType,
+                coin: coinSymbol,
                 amount: `${amountPrefix}$${(transfer.value || 0).toFixed(2)}`,
                 sub: `${transfer.amount} ${coinSymbol}`,
                 status: transfer.status,
-                counterparty: isSender
-    ? (toUser?.fullName || "Unknown")
-    : (fromUser?.fullName || "Unknown")
-
+                to: displayAddress,
+                counterparty: isSender || isAdminDebit
+                    ? (toUser?.fullName || "Unknown")
+                    : (fromUser?.fullName || "Unknown"),
+                createdAt: transfer.createdAt
             };
         });
         
@@ -597,8 +701,7 @@ exports.getRecentTransactions = async (req, res, next) => {
                 { fromUser: userId },
                 { toUser: userId }
             ],
-           status: { $in: ['completed', 'pending', 'pending_otp', 'processing', 'failed'] }
-
+            status: { $in: ['completed', 'pending', 'pending_otp', 'processing', 'failed'] }
         })
         .populate('fromUser', 'fullName')
         .populate('toUser', 'fullName')
@@ -608,34 +711,52 @@ exports.getRecentTransactions = async (req, res, next) => {
         
         const formattedTransfers = transfers.map(transfer => {
             const fromUser = transfer.fromUser;
-const toUser = transfer.toUser;
+            const toUser = transfer.toUser;
 
-const isSender = fromUser && fromUser._id
-    ? fromUser._id.toString() === userId.toString()
-    : false;
+            const isSender = fromUser && fromUser._id
+                ? fromUser._id.toString() === userId.toString()
+                : false;
 
-const isReceiver = toUser && toUser._id
-    ? toUser._id.toString() === userId.toString()
-    : false;
+            const isReceiver = toUser && toUser._id
+                ? toUser._id.toString() === userId.toString()
+                : false;
 
-// Check if it's an admin credit
-const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminCredit = transfer.fromAddress === "Admin Wallet";
+            const isAdminDebit = transfer.notes?.includes("Admin debited") || 
+                                (transfer.notes && typeof transfer.notes === 'string' && transfer.notes.includes("debited"));
+            
+            let notes = {};
+            try {
+                notes = JSON.parse(transfer.notes || "{}");
+            } catch (e) {}
             
             let transactionType = '';
             let amountPrefix = '';
             
-            if (transfer.status === 'pending') {
-                transactionType = 'Pending';
-                amountPrefix = '';
+            if (notes.type === "PAYPAL_WITHDRAWAL") {
+                transactionType = "PAYPAL_WITHDRAWAL";
+                amountPrefix = '-';
+            } else if (notes.type === "BANK_WITHDRAWAL") {
+                transactionType = "BANK_WITHDRAWAL";
+                amountPrefix = '-';
             } else if (isAdminCredit) {
-                transactionType = 'Received';
+                transactionType = 'Receive';
                 amountPrefix = '+';
-            } else if (isSender) {
-                transactionType = 'Sent';
+            } else if (isAdminDebit) {
+                transactionType = 'Send';
                 amountPrefix = '-';
             } else if (isReceiver) {
-                transactionType = 'Received';
+                transactionType = 'Receive';
                 amountPrefix = '+';
+            } else if (isSender) {
+                transactionType = 'Send';
+                amountPrefix = '-';
+            } else if (transfer.status === 'pending') {
+                transactionType = 'Pending';
+                amountPrefix = '';
+            } else {
+                transactionType = 'Unknown';
+                amountPrefix = '';
             }
             
             const coinSymbol = transfer.asset.toUpperCase();

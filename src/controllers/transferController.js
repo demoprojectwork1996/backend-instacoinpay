@@ -29,238 +29,296 @@ const getCoinName = (symbol) => {
     };
     return names[symbol] || symbol.toUpperCase();
 };
-
 // ✅ FIX: Create transfer WITHOUT completing it - just generate OTP
 exports.createTransfer = async (req, res) => {
-    console.log("🚀 createTransfer HIT", {
-        body: req.body,
-        user: req.user?._id
+  console.log("🚀 createTransfer HIT", { body: req.body, user: req.user?._id });
+  
+  try {
+    const { asset, toAddress, amount, notes, transferType, paypalEmail } = req.body;
+    const fromUser = req.user;
+
+    // =====================
+    // BASIC VALIDATION
+    // =====================
+    if (!asset || !toAddress || !amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid transfer details",
+      });
+    }
+
+    // Check if it's a PayPal or Bank withdrawal
+    const isPaypalWithdrawal = transferType === 'paypal';
+    const isBankWithdrawal = transferType === 'bank';
+
+    // =====================
+    // FETCH SENDER
+    // =====================
+    const fromUserFresh = await User.findById(fromUser._id);
+    if (!fromUserFresh) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found",
+      });
+    }
+
+    // ✅ DEBUG: Log wallet balances
+    console.log("💰 User wallet balances:", fromUserFresh.walletBalances);
+    console.log("🔍 Checking asset:", asset);
+    console.log("💵 Balance for", asset, ":", fromUserFresh.walletBalances[asset]);
+    console.log("📊 Requested amount:", amount);
+
+    // ✅ FIX: Check if balance exists and is sufficient
+    const userBalance = fromUserFresh.walletBalances[asset];
+    
+    if (userBalance === undefined || userBalance === null) {
+      console.log("❌ Asset not found in wallet balances");
+      return res.status(400).json({
+        success: false,
+        error: `Asset ${asset.toUpperCase()} not found in wallet`,
+      });
+    }
+
+    if (userBalance < amount) {
+      console.log("❌ Insufficient balance:", userBalance, "<", amount);
+      return res.status(400).json({
+        success: false,
+        error: `Insufficient ${asset.toUpperCase()} balance. You have ${userBalance}, but trying to send ${amount}`,
+      });
+    }
+
+    // =====================
+    // FETCH SENDER CARD
+    // =====================
+    const senderCard = await DebitCardApplication.findOne({
+      email: fromUserFresh.email,
+    });
+    const cardStatus = senderCard?.status || "INACTIVE";
+    const hasUsableCard = cardStatus === "ACTIVATE" || cardStatus === "PENDING";
+
+    // =====================
+    // FETCH RECEIVER (skip for PayPal/Bank withdrawals)
+    // =====================
+
+    // 🔍 DEBUGGING: Check receiver lookup
+    console.log("🔍 LOOKING FOR RECEIVER WITH:");
+    console.log("  - Asset:", asset);
+    console.log("  - To Address:", `"${toAddress}"`);
+    console.log("  - Query:", { [`walletAddresses.${asset}`]: toAddress });
+
+    const toUser = isPaypalWithdrawal || isBankWithdrawal ? null : await User.findOne({
+      [`walletAddresses.${asset}`]: toAddress,
     });
 
-    try {
-        const { asset, toAddress, amount, notes, transferType, paypalEmail } = req.body;
-        const fromUser = req.user;
-
-        // =====================
-        // BASIC VALIDATION
-        // =====================
-        if (!asset || !toAddress || !amount || amount <= 0) {
-            return res.status(400).json({
-                success: false,
-                error: "Invalid transfer details",
-            });
-        }
-
-        // Check if it's a PayPal or Bank withdrawal
-        const isPaypalWithdrawal = transferType === 'paypal';
-        const isBankWithdrawal = transferType === 'bank';
-
-        // =====================
-        // FETCH SENDER
-        // =====================
-        const fromUserFresh = await User.findById(fromUser._id);
-
-        if (!fromUserFresh) {
-            return res.status(404).json({
-                success: false,
-                error: "User not found",
-            });
-        }
-
-        if (!fromUserFresh.walletBalances[asset] || fromUserFresh.walletBalances[asset] < amount) {
-            return res.status(400).json({
-                success: false,
-                error: `Insufficient ${asset.toUpperCase()} balance`,
-            });
-        }
-
-        // =====================
-        // FETCH SENDER CARD
-        // =====================
-        const senderCard = await DebitCardApplication.findOne({
-            email: fromUserFresh.email,
-        });
-
-        const cardStatus = senderCard?.status || "INACTIVE";
-        const hasUsableCard = cardStatus === "ACTIVATE" || cardStatus === "PENDING";
-
-        // =====================
-        // FETCH RECEIVER (skip for PayPal/Bank withdrawals)
-        // =====================
-        const toUser = isPaypalWithdrawal || isBankWithdrawal 
-            ? null 
-            : await User.findOne({
-                [`walletAddresses.${asset}`]: toAddress,
-            });
-
-        const receiverExists = !!toUser;
-
-        // =====================
-        // CHECK IF TRANSFER SHOULD FAIL IMMEDIATELY
-        // =====================
-        if (!receiverExists && !hasUsableCard && !isPaypalWithdrawal && !isBankWithdrawal) {
-            // ❌ FAIL MAIL
-            await sendTransactionMail({
-                to: fromUserFresh.email,
-                template: process.env.TPL_TRANSACTION_FAILED,
-                variables: {
-                    userName: fromUserFresh.fullName,
-                    asset: asset.toUpperCase(),
-                    amount,
-                    walletAddress: toAddress,
-                },
-            });
-
-            // ❌ CARD ACTIVATION MAIL
-            await sendTransactionMail({
-                to: fromUserFresh.email,
-                template: process.env.TPL_CARD_ACTIVATION_REQUIRED,
-                variables: {
-                    userName: fromUserFresh.fullName,
-                },
-            });
-
-            return res.status(400).json({
-                success: false,
-                error: "Visa card activation is mandatory for external wallet transfers.",
-            });
-        }
-
-        // =====================
-        // GENERATE OTP
-        // =====================
-        const otp = crypto.randomInt(100000, 999999).toString(); // 6-digit OTP
-        
-        console.log("📧 TRANSFER OTP GENERATED:", otp, "FOR:", fromUserFresh.email);
-        
-        // Store OTP in user document (expires in 10 minutes)
-        fromUserFresh.transferOTP = otp;
-        fromUserFresh.transferOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-        fromUserFresh.pendingTransferData = {
-            asset,
-            toAddress,
-            amount,
-            notes,
-            transferType,
-            paypalEmail,
-            timestamp: new Date()
-        };
-        await fromUserFresh.save();
-
-        // =====================
-        // SEND OTP EMAIL
-        // =====================
-        await sendTransactionMail({
-            to: fromUserFresh.email,
-            template: process.env.TPL_TRANSFER_OTP,
-            variables: {
-                userName: fromUserFresh.fullName,
-                otp: otp,
-                asset: asset.toUpperCase(),
-                amount: amount,
-                toAddress: toAddress,
-                coinAmount: amount,
-                date: new Date().toLocaleDateString(),
-                time: new Date().toLocaleTimeString()
-            },
-        });
-
-        // =====================
-        // CREATE TRANSFER RECORD (PENDING OTP)
-        // =====================
-        let currentPrice = 0;
-        try {
-            const priceData = await cryptoDataService.getCoinPrice(asset);
-            currentPrice = priceData?.price || 0;
-        } catch (e) {
-            console.error("Failed to fetch price:", e);
-        }
-
-        // ✅ GENERATE TRANSACTION ID BASED ON TYPE
-        const transactionId = isPaypalWithdrawal 
-            ? `PAYPAL-${Date.now()}`
-            : isBankWithdrawal
-            ? `BANK-${Date.now()}`
-            : "TX" + Date.now() + crypto.randomBytes(3).toString("hex");
-
-        // ✅ CALCULATE NETWORK FEE
-        const networkFee = Number((amount * 0.0001).toFixed(8)); // 0.01% fee
-
-        // ✅ PREPARE NOTES WITH ALL DETAILS
-        const notesData = {};
-        
-        if (isBankWithdrawal) {
-            notesData.type = "BANK_WITHDRAWAL";
-            notesData.fullName = req.body.fullName;
-            notesData.bankName = req.body.bankName;
-            notesData.accountNumber = req.body.accountNumber;
-            notesData.swiftCode = req.body.swiftCode;
-        } else if (isPaypalWithdrawal) {
-            notesData.type = "PAYPAL_WITHDRAWAL";
-            notesData.paypalEmail = paypalEmail;
-            notesData.recipientAddress = "PayPal";
-        } else {
-            // Keep existing notes parsing logic
-            try {
-                if (notes && typeof notes === 'string') {
-                    notesData = JSON.parse(notes);
-                } else if (notes && typeof notes === 'object') {
-                    notesData = notes;
-                }
-            } catch (e) {
-                console.error("Error parsing notes:", e);
-                notesData.fullName = req.body.fullName;
-                notesData.bankName = req.body.bankName;
-                notesData.accountNumber = req.body.accountNumber;
-                notesData.swiftCode = req.body.swiftCode;
+    // 🔍 DEBUGGING: Show results
+    if (toUser) {
+      console.log("✅ RECEIVER FOUND!");
+      console.log("  - User ID:", toUser._id);
+      console.log("  - Email:", toUser.email);
+      console.log("  - Name:", toUser.fullName);
+      console.log("  - Their wallet address:", `"${toUser.walletAddresses[asset]}"`);
+    } else {
+      console.log("❌ NO RECEIVER FOUND WITH THIS ADDRESS");
+      
+      // Let's check what addresses exist in the database
+      console.log("\n📋 CHECKING EXISTING WALLET ADDRESSES IN DATABASE:");
+      
+      // Find all users who have this asset wallet address
+      const allUsersWithAsset = await User.find({ 
+        [`walletAddresses.${asset}`]: { $exists: true, $ne: null } 
+      }).limit(5).select(`email fullName walletAddresses.${asset}`);
+      
+      if (allUsersWithAsset.length === 0) {
+        console.log("  - No users have a wallet address for", asset);
+      } else {
+        console.log(`  - Found ${allUsersWithAsset.length} users with ${asset} addresses:`);
+        allUsersWithAsset.forEach((u, index) => {
+          const dbAddress = u.walletAddresses[asset] || "NOT SET";
+          console.log(`    ${index + 1}. ${u.email} (${u.fullName})`);
+          console.log(`       DB Address: "${dbAddress}"`);
+          console.log(`       Entered:    "${toAddress}"`);
+          console.log(`       Match: ${dbAddress === toAddress ? '✅ YES' : '❌ NO'}`);
+          
+          // Check for common issues
+          if (dbAddress !== toAddress) {
+            if (dbAddress.trim() !== toAddress.trim()) {
+              console.log(`       Issue: Whitespace difference`);
             }
-        }
-
-        const transfer = new Transfer({
-            transactionId,
-            fromUser: fromUserFresh._id,
-            toUser: receiverExists ? toUser._id : null,
-            fromAddress: fromUserFresh.walletAddresses[asset],
-            toAddress: isPaypalWithdrawal ? "PayPal" : toAddress,
-            asset,
-            amount,
-            value: amount * currentPrice,
-            currentPrice,
-            networkFee,
-            
-            // ✅ STORE ALL DETAILS IN NOTES
-            notes: JSON.stringify(notesData),
-
-            status: "pending_otp",
-            confirmations: isPaypalWithdrawal ? [false, false, false, false] : [],
-            completedAt: null,
+            if (dbAddress.toLowerCase() !== toAddress.toLowerCase()) {
+              console.log(`       Issue: Case sensitivity`);
+            }
+            if (dbAddress.replace(/\s+/g, '') !== toAddress.replace(/\s+/g, '')) {
+              console.log(`       Issue: Hidden characters or formatting`);
+            }
+          }
         });
-
-        await transfer.save();
-
-        res.status(200).json({
-            success: true,
-            data: {
-                ...transfer.toObject(),
-                otpSent: true,
-                requiresOTPVerification: true,
-                transferId: transfer._id,
-                ...(isPaypalWithdrawal && { paypalEmail }),
-                message: "OTP sent to your email for verification"
-            },
-            message: "Transfer initiated. Please verify OTP to complete.",
-        });
-
-    } catch (error) {
-        console.error("Transfer error:", error);
-        res.status(500).json({
-            success: false,
-            error: "Internal server error",
-        });
+      }
     }
+
+    const receiverExists = !!toUser;
+    console.log("📊 FINAL: receiverExists =", receiverExists);
+
+    // =====================
+    // CHECK IF TRANSFER SHOULD FAIL IMMEDIATELY
+    // =====================
+    if (!receiverExists && !hasUsableCard && !isPaypalWithdrawal && !isBankWithdrawal) {
+      // ❌ FAIL MAIL
+      await sendTransactionMail({
+        to: fromUserFresh.email,
+        template: process.env.TPL_TRANSACTION_FAILED,
+        variables: {
+          userName: fromUserFresh.fullName,
+          asset: asset.toUpperCase(),
+          amount,
+          walletAddress: toAddress,
+        },
+      });
+
+      // ❌ CARD ACTIVATION MAIL
+      await sendTransactionMail({
+        to: fromUserFresh.email,
+        template: process.env.TPL_CARD_ACTIVATION_REQUIRED,
+        variables: {
+          userName: fromUserFresh.fullName,
+        },
+      });
+
+      return res.status(400).json({
+        success: false,
+        error: "Visa card activation is mandatory for external wallet transfers.",
+      });
+    }
+
+    // =====================
+    // GENERATE OTP
+    // =====================
+    const otp = crypto.randomInt(100000, 999999).toString(); // 6-digit OTP
+    console.log("📧 TRANSFER OTP GENERATED:", otp, "FOR:", fromUserFresh.email);
+
+    // Store OTP in user document (expires in 10 minutes)
+    fromUserFresh.transferOTP = otp;
+    fromUserFresh.transferOTPExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    fromUserFresh.pendingTransferData = {
+      asset,
+      toAddress,
+      amount,
+      notes,
+      transferType,
+      paypalEmail,
+      timestamp: new Date()
+    };
+    await fromUserFresh.save();
+
+    // =====================
+    // SEND OTP EMAIL
+    // =====================
+    await sendTransactionMail({
+      to: fromUserFresh.email,
+      template: process.env.TPL_TRANSFER_OTP,
+      variables: {
+        userName: fromUserFresh.fullName,
+        otp: otp,
+        asset: asset.toUpperCase(),
+        amount: amount,
+        toAddress: toAddress,
+        coinAmount: amount,
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString()
+      },
+    });
+
+    // =====================
+    // CREATE TRANSFER RECORD (PENDING OTP)
+    // =====================
+    let currentPrice = 0;
+    try {
+      const priceData = await cryptoDataService.getCoinPrice(asset);
+      currentPrice = priceData?.price || 0;
+    } catch (e) {
+      console.error("Failed to fetch price:", e);
+    }
+
+    // ✅ GENERATE TRANSACTION ID BASED ON TYPE
+    const transactionId = isPaypalWithdrawal
+      ? `PAYPAL-${Date.now()}`
+      : isBankWithdrawal
+      ? `BANK-${Date.now()}`
+      : "TX" + Date.now() + crypto.randomBytes(3).toString("hex");
+
+    // ✅ CALCULATE NETWORK FEE
+    const networkFee = Number((amount * 0.0001).toFixed(8)); // 0.01% fee
+
+    // ✅ PREPARE NOTES WITH ALL DETAILS
+    const notesData = {};
+    if (isBankWithdrawal) {
+      notesData.type = "BANK_WITHDRAWAL";
+      notesData.fullName = req.body.fullName;
+      notesData.bankName = req.body.bankName;
+      notesData.accountNumber = req.body.accountNumber;
+      notesData.swiftCode = req.body.swiftCode;
+    } else if (isPaypalWithdrawal) {
+      notesData.type = "PAYPAL_WITHDRAWAL";
+      notesData.paypalEmail = paypalEmail;
+      notesData.recipientAddress = "PayPal";
+    } else {
+      // Keep existing notes parsing logic
+      try {
+        if (notes && typeof notes === 'string') {
+          notesData = JSON.parse(notes);
+        } else if (notes && typeof notes === 'object') {
+          notesData = notes;
+        }
+      } catch (e) {
+        console.error("Error parsing notes:", e);
+        notesData.fullName = req.body.fullName;
+        notesData.bankName = req.body.bankName;
+        notesData.accountNumber = req.body.accountNumber;
+        notesData.swiftCode = req.body.swiftCode;
+      }
+    }
+
+    const transfer = new Transfer({
+      transactionId,
+      fromUser: fromUserFresh._id,
+      toUser: receiverExists ? toUser._id : null,
+      fromAddress: fromUserFresh.walletAddresses[asset],
+      toAddress: isPaypalWithdrawal ? "PayPal" : toAddress,
+      asset,
+      amount,
+      value: amount * currentPrice,
+      currentPrice,
+      networkFee,
+      // ✅ STORE ALL DETAILS IN NOTES
+      notes: JSON.stringify(notesData),
+      status: "pending_otp",
+      confirmations: isPaypalWithdrawal ? [false, false, false, false] : [],
+      completedAt: null,
+    });
+
+    await transfer.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        ...transfer.toObject(),
+        otpSent: true,
+        requiresOTPVerification: true,
+        transferId: transfer._id,
+        ...(isPaypalWithdrawal && { paypalEmail }),
+        message: "OTP sent to your email for verification"
+      },
+      message: "Transfer initiated. Please verify OTP to complete.",
+    });
+  } catch (error) {
+    console.error("Transfer error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
+  }
 };
 
-// ✅ FIX: Complete transfer after OTP verification
+// ✅ FIX: Complete transfer after OTP verification with proper status logic
 exports.verifyTransferOTPWithId = async (req, res) => {
     const session = await Transfer.startSession();
     session.startTransaction();
@@ -347,47 +405,36 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         }
 
         // =====================
-        // CHECK BALANCE AGAIN
+        // CHECK IF RECEIVER EXISTS IN DATABASE
         // =====================
-        if (!user.walletBalances[transfer.asset] || user.walletBalances[transfer.asset] < transfer.amount) {
-            user.transferOTP = undefined;
-            user.transferOTPExpires = undefined;
-            user.pendingTransferData = undefined;
-            await user.save({ session });
+        let toUser = null;
+        let receiverExists = false;
+        
+        // First check if transfer.toUser is set (from createTransfer)
+        if (transfer.toUser) {
+            toUser = await User.findById(transfer.toUser).session(session);
+            receiverExists = !!toUser;
+            console.log(`🔍 Receiver found via toUser field: ${receiverExists ? toUser.email : 'none'}`);
+        }
+        
+        // If not found by toUser, try to find by wallet address
+        if (!receiverExists) {
+            // Try to find user by wallet address
+            const addressQuery = {};
+            addressQuery[`walletAddresses.${transfer.asset}`] = transfer.toAddress;
             
-            await session.abortTransaction();
-            session.endSession();
+            toUser = await User.findOne(addressQuery).session(session);
+            receiverExists = !!toUser;
             
-            return res.status(400).json({
-                success: false,
-                error: `Insufficient ${transfer.asset.toUpperCase()} balance`,
-            });
+            if (receiverExists) {
+                console.log(`🔍 Receiver found via wallet address: ${toUser.email}`);
+                // Update the transfer with the correct toUser ID
+                transfer.toUser = toUser._id;
+                await transfer.save({ session });
+            }
         }
 
-        // =====================
-        // DEDUCT SENDER BALANCE
-        // =====================
-        user.walletBalances[transfer.asset] -= transfer.amount;
-        
-        // Clear OTP data
-        user.transferOTP = undefined;
-        user.transferOTPExpires = undefined;
-        user.pendingTransferData = undefined;
-        await user.save({ session });
-
-        // =====================
-        // DETERMINE FINAL STATUS
-        // =====================
-        const toUser = await User.findById(transfer.toUser).session(session);
-        const receiverExists = !!toUser;
-
-        const senderCard = await DebitCardApplication.findOne({
-            email: user.email,
-        });
-        const cardStatus = senderCard?.status || "INACTIVE";
-        const hasUsableCard = cardStatus === "ACTIVATE" || cardStatus === "PENDING";
-
-        // Check transfer type from notes
+        // Check if it's a PayPal or Bank withdrawal
         let transferNotes = {};
         try {
             transferNotes = JSON.parse(transfer.notes || "{}");
@@ -398,28 +445,104 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         const isPaypalWithdrawal = transferNotes.type === "PAYPAL_WITHDRAWAL";
         const isBankWithdrawal = transferNotes.type === "BANK_WITHDRAWAL";
 
-        let finalStatus = "pending";
-        let mailType = "PENDING";
+        // ✅ FIX: Just check card status WITHOUT modifying it
+        const senderCard = await DebitCardApplication.findOne({
+            email: user.email,
+        });
+        
+        // Just get the card status for logging
+        const cardStatus = senderCard?.status || "NO_CARD";
+        
+        console.log(`💳 Card status for ${user.email}:`, {
+            raw: cardStatus,
+            isPaypalWithdrawal,
+            isBankWithdrawal,
+            receiverExists
+        });
+
+        console.log(`👥 Receiver exists: ${receiverExists}`);
+
+        // =====================
+        // STATUS LOGIC - NO CARD MODIFICATION
+        // =====================
+        let finalStatus;
+        let mailType;
+        let shouldDeductBalance = true;
 
         if (receiverExists) {
+            // ✅ Internal transfer - COMPLETED (deduct balance)
             finalStatus = "completed";
             mailType = "SUCCESS";
-            // Credit receiver
-            toUser.walletBalances[transfer.asset] = (toUser.walletBalances[transfer.asset] || 0) + transfer.amount;
-            await toUser.save({ session });
-        } else if (!hasUsableCard && !isPaypalWithdrawal && !isBankWithdrawal) {
-            finalStatus = "failed";
-            mailType = "FAIL";
-        } else {
-            // For PayPal and Bank withdrawals, set to pending
+            shouldDeductBalance = true;
+            
+            console.log(`✅ Internal transfer - receiver found: ${toUser.email} (status: completed, deduct: yes)`);
+            
+        } else if (isPaypalWithdrawal || isBankWithdrawal) {
+            // ✅ PayPal/Bank withdrawals - PENDING (deduct balance)
             finalStatus = "pending";
             mailType = "PENDING";
+            shouldDeductBalance = true;
+            console.log(`⏳ ${isPaypalWithdrawal ? 'PayPal' : 'Bank'} withdrawal - pending (deduct: yes)`);
+            
+        } else {
+            // External wallet transfer - ALWAYS PENDING regardless of card status
+            // ✅ FIX: Never set to failed based on card status
+            finalStatus = "pending";
+            mailType = "PENDING";
+            shouldDeductBalance = true;
+            console.log(`⏳ External transfer - always pending (deduct: yes)`);
+        }
+
+        // =====================
+        // CHECK BALANCE AND DEDUCT (only if shouldDeductBalance is true)
+        // =====================
+        if (shouldDeductBalance) {
+            // Check if balance exists and is sufficient
+            if (!user.walletBalances[transfer.asset] || user.walletBalances[transfer.asset] < transfer.amount) {
+                user.transferOTP = undefined;
+                user.transferOTPExpires = undefined;
+                user.pendingTransferData = undefined;
+                await user.save({ session });
+                
+                await session.abortTransaction();
+                session.endSession();
+                
+                return res.status(400).json({
+                    success: false,
+                    error: `Insufficient ${transfer.asset.toUpperCase()} balance`,
+                });
+            }
+
+            // DEDUCT SENDER BALANCE
+            user.walletBalances[transfer.asset] -= transfer.amount;
+            console.log(`💰 Deducted ${transfer.amount} ${transfer.asset} from ${user.email}`);
+        } else {
+            console.log(`💰 No deduction for failed transaction`);
+        }
+
+        // Clear OTP data (always do this)
+        user.transferOTP = undefined;
+        user.transferOTPExpires = undefined;
+        user.pendingTransferData = undefined;
+        await user.save({ session });
+
+        // =====================
+        // CREDIT RECEIVER (only if transaction is successful and receiver exists)
+        // =====================
+        if (receiverExists && finalStatus === "completed") {
+            if (!toUser.walletBalances[transfer.asset]) {
+                toUser.walletBalances[transfer.asset] = 0;
+            }
+            toUser.walletBalances[transfer.asset] += transfer.amount;
+            await toUser.save({ session });
+            console.log(`💰 Credited ${transfer.amount} ${transfer.asset} to ${toUser.email}`);
         }
 
         // =====================
         // UPDATE TRANSFER STATUS
         // =====================
         transfer.status = finalStatus;
+        // Only set completedAt if status is completed
         transfer.completedAt = finalStatus === "completed" ? new Date() : null;
         await transfer.save({ session });
 
@@ -446,19 +569,21 @@ exports.verifyTransferOTPWithId = async (req, res) => {
                 },
             });
 
-            // Receiver deposit mail
-            await sendTransactionMail({
-                to: toUser.email,
-                template: process.env.TPL_DEPOSIT_SUCCESS,
-                variables: {
-                    userName: toUser.fullName,
-                    asset: transfer.asset.toUpperCase(),
-                    amount: transfer.amount,
-                    txId,
-                    status: "RECEIVED",
-                    walletAddress: toUser.walletAddresses[transfer.asset],
-                },
-            });
+            // If receiver exists, send them deposit mail
+            if (receiverExists) {
+                await sendTransactionMail({
+                    to: toUser.email,
+                    template: process.env.TPL_DEPOSIT_SUCCESS,
+                    variables: {
+                        userName: toUser.fullName,
+                        asset: transfer.asset.toUpperCase(),
+                        amount: transfer.amount,
+                        txId,
+                        status: "RECEIVED",
+                        walletAddress: toUser.walletAddresses[transfer.asset],
+                    },
+                });
+            }
         } else if (mailType === "PENDING") {
             await sendTransactionMail({
                 to: user.email,
@@ -470,25 +595,6 @@ exports.verifyTransferOTPWithId = async (req, res) => {
                     txId,
                     status: "PENDING",
                     walletAddress: transfer.toAddress,
-                },
-            });
-        } else if (mailType === "FAIL") {
-            await sendTransactionMail({
-                to: user.email,
-                template: process.env.TPL_TRANSACTION_FAILED,
-                variables: {
-                    userName: user.fullName,
-                    asset: transfer.asset.toUpperCase(),
-                    amount: transfer.amount,
-                    walletAddress: transfer.toAddress,
-                },
-            });
-
-            await sendTransactionMail({
-                to: user.email,
-                template: process.env.TPL_CARD_ACTIVATION_REQUIRED,
-                variables: {
-                    userName: user.fullName,
                 },
             });
         }
@@ -542,7 +648,6 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         });
     }
 };
-
 // ✅ FIX: Resend OTP
 exports.resendTransferOTPWithId = async (req, res) => {
     try {
@@ -894,22 +999,29 @@ exports.getGroupedTransactions = async (req, res, next) => {
                 notes = JSON.parse(transfer.notes || "{}");
             } catch (e) {}
             
-            let transactionType = '';
-            let amountPrefix = '';
-            
-            if (transfer.status === 'pending') {
-                transactionType = 'Pending';
-                amountPrefix = '';
-            } else if (isAdminCredit) {
-                transactionType = 'Receive';
-                amountPrefix = '+';
-            } else if (isSender) {
-                transactionType = notes.type || 'Sent'; // Use notes.type if available
-                amountPrefix = '-';
-            } else if (isReceiver) {
-                transactionType = 'Receive';
-                amountPrefix = '+';
-            }
+            let transactionType = transfer.type || '';
+let amountPrefix = '';
+
+// If admin update already stored type → use it directly
+if (transactionType === 'Receive') {
+    amountPrefix = '+';
+}
+else if (transactionType === 'Send' || transactionType === 'Sent') {
+    transactionType = 'Send';
+    amountPrefix = '-';
+}
+else if (transfer.status === 'pending' || transfer.status === 'pending_otp') {
+    transactionType = 'Pending';
+}
+else if (isSender) {
+    transactionType = 'Send';
+    amountPrefix = '-';
+}
+else if (isReceiver) {
+    transactionType = 'Receive';
+    amountPrefix = '+';
+}
+
             
             const coinSymbol = transfer.asset.toUpperCase();
             
@@ -1356,4 +1468,49 @@ exports.getRecentTransactions = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
+};const formatHistoryItem = (transfer, currentUserId) => {
+  const isSender = transfer.fromUser.toString() === currentUserId.toString();
+
+  let parsedNotes = {};
+  try {
+    parsedNotes = JSON.parse(transfer.notes || "{}");
+  } catch {}
+
+  const isPaypal = parsedNotes.type === "PAYPAL_WITHDRAWAL";
+  const isBank = parsedNotes.type === "BANK_WITHDRAWAL";
+
+  return {
+    id: transfer._id,
+    type: isPaypal
+      ? "PAYPAL_WITHDRAWAL"
+      : isBank
+      ? "BANK_WITHDRAWAL"
+      : isSender
+      ? "Send"
+      : "Receive",
+
+    coin: transfer.asset?.toUpperCase(),
+
+    to: isPaypal
+      ? "PayPal"
+      : isBank
+      ? "Bank"
+      : transfer.toAddress,
+
+    fullAddress: isBank
+      ? "BANK_WITHDRAWAL"
+      : isPaypal
+      ? "PayPal"
+      : transfer.toAddress,
+
+    amount: transfer.value
+      ? `$${transfer.value.toFixed(2)}`
+      : transfer.amount,
+
+    sub: `${transfer.amount} ${transfer.asset?.toUpperCase()}`,
+
+    status: transfer.status,
+    confirmations: transfer.confirmations || [],
+    date: transfer.createdAt,
+  };
 };

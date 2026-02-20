@@ -108,15 +108,18 @@ router.get("/by-email/:email", async (req, res) => {
       fullName: card.fullName,
       email: card.email,
       cardType: card.cardType,
-      status: card.status,
+      status: card.status, // ✅ This should be whatever the admin set
     };
 
+    // Only show sensitive data if card is ACTIVE
     if (card.status === "ACTIVATE") {
       safeCard.cardNumber = card.cardNumber;
       safeCard.expiry = card.expiry;
       safeCard.cvv = card.cvv;
     }
 
+    console.log('📧 Returning card for email:', req.params.email, 'with status:', card.status);
+    
     res.json({ success: true, data: safeCard });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

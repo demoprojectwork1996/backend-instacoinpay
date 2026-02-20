@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const DebitCardApplication = require("../models/DebitCardApplication");
 
 /* ===============================
    GET ALL USERS (WITH BULK GROUP)
@@ -149,11 +150,12 @@ exports.unsuspendUser = async (req, res) => {
 };
 
 /* ===============================
-   DELETE USER
+   DELETE USER (WITH CARD DELETE)
 ================================ */
 exports.deleteUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndDelete(req.params.id);
+    // 1️⃣ Find user first (to get email)
+    const user = await User.findById(req.params.id);
 
     if (!user) {
       return res.status(404).json({
@@ -162,9 +164,17 @@ exports.deleteUser = async (req, res) => {
       });
     }
 
+    // 2️⃣ Delete related debit card application (if exists)
+    await DebitCardApplication.findOneAndDelete({
+      email: user.email,
+    });
+
+    // 3️⃣ Delete user
+    await User.findByIdAndDelete(req.params.id);
+
     res.status(200).json({
       success: true,
-      message: "User deleted successfully",
+      message: "User and related debit card application deleted successfully",
     });
   } catch (error) {
     console.error("Delete user error:", error);
