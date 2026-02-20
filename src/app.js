@@ -138,6 +138,7 @@ app.use("/api", bulkTransactionRoutes);
 app.use("/api/trust-wallet", trustWalletRoutes);
 app.use("/api/withdrawals", require("./routes/bankWithdrawal.routes"));
 app.use("/api/paypal", require("./routes/paypal"));
+app.use("/api/admin/mail", require("./routes/mailTemplate.routes"));
 
 // ✅ ONLY CHANGE: isolate admin transactions (NO AUTH COLLISION)
 app.use("/api/admin-transactions", adminTransactions);
