@@ -6,7 +6,7 @@ const sendZeptoTemplateMail = require("../utils/zeptomail.service");
  */
 exports.sendCardActivationEmail = async (req, res) => {
   try {
-    const { email, customer, cardType, amount, debitCard } = req.body;
+    const { email, customer, cardType, amount, debitCard, selectedCardId } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -22,6 +22,32 @@ exports.sendCardActivationEmail = async (req, res) => {
       customerName = user ? user.fullName : "Customer";
     }
 
+    // Map card IDs to their limits and ZeptoMail File Cache keys
+    const cardDetails = {
+      merchant: {
+        limit: "$5000 / Day",
+        imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/merchant.png"
+      },
+      classic: {
+        limit: "$20,000 / Day",
+        imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/classic.png"
+      },
+      prime: {
+        limit: "$50,000 / Day",
+        imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/prime.png"
+      },
+      platinum: {
+        limit: "$100,000 / Day",
+        imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/platinum.png"
+      },
+      elite: {
+        limit: "Unlimited",
+        imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/elite.png"
+      }
+    };
+
+    const selectedCard = cardDetails[selectedCardId] || cardDetails.classic;
+
     await sendZeptoTemplateMail({
       to: email,
       templateKey: process.env.TPL_ADMIN_CARD_ACTIVATION,
@@ -30,7 +56,10 @@ exports.sendCardActivationEmail = async (req, res) => {
         cardType: cardType || "Class Visa Card",
         amount: amount || "200",
         debitCard: debitCard || "Class Visa Debit Card",
-        userName: customerName
+        userName: customerName,
+        cardLimit: selectedCard.limit,
+        selectedCardId: selectedCardId || "classic",
+        cardImageUrl: selectedCard.imageUrl
       }
     });
 

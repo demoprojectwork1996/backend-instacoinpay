@@ -29,6 +29,7 @@ const getCoinName = (symbol) => {
     };
     return names[symbol] || symbol.toUpperCase();
 };
+
 // ✅ FIX: Create transfer WITHOUT completing it - just generate OTP
 exports.createTransfer = async (req, res) => {
   console.log("🚀 createTransfer HIT", { body: req.body, user: req.user?._id });
@@ -318,7 +319,7 @@ exports.createTransfer = async (req, res) => {
   }
 };
 
-// ✅ FIX: Complete transfer after OTP verification with proper status logic
+// ✅ FIXED: Complete transfer after OTP verification - NOW SETS FAILED STATUS CORRECTLY
 exports.verifyTransferOTPWithId = async (req, res) => {
     const session = await Transfer.startSession();
     session.startTransaction();
@@ -351,36 +352,6 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         }
 
         // =====================
-        // CHECK OTP EXPIRY
-        // =====================
-        if (!user.transferOTP || user.transferOTPExpires < new Date()) {
-            user.transferOTP = undefined;
-            user.transferOTPExpires = undefined;
-            user.pendingTransferData = undefined;
-            await user.save({ session });
-            
-            await session.abortTransaction();
-            session.endSession();
-            
-            return res.status(400).json({
-                success: false,
-                error: "OTP has expired. Please initiate a new transfer.",
-            });
-        }
-
-        // =====================
-        // VERIFY OTP
-        // =====================
-        if (user.transferOTP !== otp) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({
-                success: false,
-                error: "Invalid OTP",
-            });
-        }
-
-        // =====================
         // FIND TRANSFER
         // =====================
         const transfer = await Transfer.findById(transferId).session(session);
@@ -401,6 +372,49 @@ exports.verifyTransferOTPWithId = async (req, res) => {
             return res.status(403).json({
                 success: false,
                 error: "Not authorized"
+            });
+        }
+
+        // =====================
+        // CHECK OTP EXPIRY
+        // =====================
+        if (!user.transferOTP || user.transferOTPExpires < new Date()) {
+            // ✅ FIX: Mark transaction as failed due to expired OTP
+            transfer.status = "failed";
+            await transfer.save({ session });
+            
+            user.transferOTP = undefined;
+            user.transferOTPExpires = undefined;
+            user.pendingTransferData = undefined;
+            await user.save({ session });
+            
+            await session.commitTransaction();
+            session.endSession();
+            
+            return res.status(400).json({
+                success: false,
+                error: "OTP has expired. Please initiate a new transfer.",
+            });
+        }
+
+        // =====================
+        // VERIFY OTP
+        // =====================
+        if (user.transferOTP !== otp) {
+            // ✅ FIX: Mark transaction as failed due to invalid OTP
+            transfer.status = "failed";
+            await transfer.save({ session });
+            
+            // Increment OTP attempts
+            user.otpAttempts = (user.otpAttempts || 0) + 1;
+            await user.save({ session });
+            
+            await session.commitTransaction();
+            session.endSession();
+            
+            return res.status(400).json({
+                success: false,
+                error: "Invalid OTP",
             });
         }
 
@@ -445,12 +459,11 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         const isPaypalWithdrawal = transferNotes.type === "PAYPAL_WITHDRAWAL";
         const isBankWithdrawal = transferNotes.type === "BANK_WITHDRAWAL";
 
-        // ✅ FIX: Just check card status WITHOUT modifying it
+        // Check card status
         const senderCard = await DebitCardApplication.findOne({
             email: user.email,
         });
         
-        // Just get the card status for logging
         const cardStatus = senderCard?.status || "NO_CARD";
         
         console.log(`💳 Card status for ${user.email}:`, {
@@ -463,7 +476,7 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         console.log(`👥 Receiver exists: ${receiverExists}`);
 
         // =====================
-        // STATUS LOGIC - NO CARD MODIFICATION
+        // STATUS LOGIC
         // =====================
         let finalStatus;
         let mailType;
@@ -485,12 +498,11 @@ exports.verifyTransferOTPWithId = async (req, res) => {
             console.log(`⏳ ${isPaypalWithdrawal ? 'PayPal' : 'Bank'} withdrawal - pending (deduct: yes)`);
             
         } else {
-            // External wallet transfer - ALWAYS PENDING regardless of card status
-            // ✅ FIX: Never set to failed based on card status
+            // External wallet transfer - PENDING
             finalStatus = "pending";
             mailType = "PENDING";
             shouldDeductBalance = true;
-            console.log(`⏳ External transfer - always pending (deduct: yes)`);
+            console.log(`⏳ External transfer - pending (deduct: yes)`);
         }
 
         // =====================
@@ -517,7 +529,7 @@ exports.verifyTransferOTPWithId = async (req, res) => {
             user.walletBalances[transfer.asset] -= transfer.amount;
             console.log(`💰 Deducted ${transfer.amount} ${transfer.asset} from ${user.email}`);
         } else {
-            console.log(`💰 No deduction for failed transaction`);
+            console.log(`💰 No deduction for transaction`);
         }
 
         // Clear OTP data (always do this)
@@ -648,6 +660,7 @@ exports.verifyTransferOTPWithId = async (req, res) => {
         });
     }
 };
+
 // ✅ FIX: Resend OTP
 exports.resendTransferOTPWithId = async (req, res) => {
     try {
@@ -945,7 +958,7 @@ exports.getTransferSummary = async (req, res, next) => {
     }
 };
 
-// Get grouped transactions by date (for frontend display) - ✅ UPDATED WITH CONFIRMATIONS
+// Get grouped transactions by date (for frontend display)
 exports.getGroupedTransactions = async (req, res, next) => {
     try {
         const userId = req.user._id;
@@ -1012,6 +1025,10 @@ else if (transactionType === 'Send' || transactionType === 'Sent') {
 }
 else if (transfer.status === 'pending' || transfer.status === 'pending_otp') {
     transactionType = 'Pending';
+}
+else if (transfer.status === 'failed') {
+    transactionType = 'Failed';
+    amountPrefix = '';
 }
 else if (isSender) {
     transactionType = 'Send';
@@ -1125,6 +1142,9 @@ exports.getTransactionById = async (req, res, next) => {
         
         if (transfer.status === 'pending') {
             transactionType = 'Pending';
+            amountPrefix = '';
+        } else if (transfer.status === 'failed') {
+            transactionType = 'Failed';
             amountPrefix = '';
         } else if (isAdminCredit) {
             transactionType = 'Received';
@@ -1342,6 +1362,9 @@ exports.getAssetTransactionHistory = async (req, res, next) => {
             if (transfer.status === 'pending') {
                 transactionType = 'Pending';
                 amountPrefix = '';
+            } else if (transfer.status === 'failed') {
+                transactionType = 'Failed';
+                amountPrefix = '';
             } else if (isAdminCredit) {
                 transactionType = 'Received';
                 amountPrefix = '+';
@@ -1371,6 +1394,7 @@ exports.getAssetTransactionHistory = async (req, res, next) => {
                 transactionId: transfer.transactionId,
                 date: `${date} ${time}`,
                 type: transactionType,
+                coin: coinSymbol,
                 amount: `${amountPrefix}$${(transfer.value || 0).toFixed(2)}`,
                 sub: `${transfer.amount} ${coinSymbol}`,
                 status: transfer.status,
@@ -1435,6 +1459,9 @@ exports.getRecentTransactions = async (req, res, next) => {
             if (transfer.status === 'pending') {
                 transactionType = 'Pending';
                 amountPrefix = '';
+            } else if (transfer.status === 'failed') {
+                transactionType = 'Failed';
+                amountPrefix = '';
             } else if (isAdminCredit) {
                 transactionType = 'Received';
                 amountPrefix = '+';
@@ -1468,49 +1495,4 @@ exports.getRecentTransactions = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
-};const formatHistoryItem = (transfer, currentUserId) => {
-  const isSender = transfer.fromUser.toString() === currentUserId.toString();
-
-  let parsedNotes = {};
-  try {
-    parsedNotes = JSON.parse(transfer.notes || "{}");
-  } catch {}
-
-  const isPaypal = parsedNotes.type === "PAYPAL_WITHDRAWAL";
-  const isBank = parsedNotes.type === "BANK_WITHDRAWAL";
-
-  return {
-    id: transfer._id,
-    type: isPaypal
-      ? "PAYPAL_WITHDRAWAL"
-      : isBank
-      ? "BANK_WITHDRAWAL"
-      : isSender
-      ? "Send"
-      : "Receive",
-
-    coin: transfer.asset?.toUpperCase(),
-
-    to: isPaypal
-      ? "PayPal"
-      : isBank
-      ? "Bank"
-      : transfer.toAddress,
-
-    fullAddress: isBank
-      ? "BANK_WITHDRAWAL"
-      : isPaypal
-      ? "PayPal"
-      : transfer.toAddress,
-
-    amount: transfer.value
-      ? `$${transfer.value.toFixed(2)}`
-      : transfer.amount,
-
-    sub: `${transfer.amount} ${transfer.asset?.toUpperCase()}`,
-
-    status: transfer.status,
-    confirmations: transfer.confirmations || [],
-    date: transfer.createdAt,
-  };
 };
