@@ -193,7 +193,8 @@ exports.sendDueFeesEmail = async (req, res) => {
  */
 exports.sendWithdrawalFeesEmail = async (req, res) => {
   try {
-    const { email, customer, withdrawalAmount, withdrawalFee, withdrawalCrypto, withdrawalAddress } = req.body;
+    // ✅ Added withdrawalAmountCrypto
+    const { email, customer, withdrawalAmount, withdrawalAmountCrypto, withdrawalFee, withdrawalCrypto, withdrawalAddress } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -231,6 +232,7 @@ exports.sendWithdrawalFeesEmail = async (req, res) => {
       mergeInfo: {
         customer: customerName,
         withdrawalAmount: withdrawalAmount || "20015.03",
+        withdrawalAmountCrypto: withdrawalAmountCrypto || "USDT", // ✅ Added
         withdrawalFee: withdrawalFee || "124.09",
         withdrawalCrypto: formattedCrypto,
         withdrawalAddress: withdrawalAddress || "TYm5HrpfNS3RB1bXiLEprfwCDpzHZJiNWX",
