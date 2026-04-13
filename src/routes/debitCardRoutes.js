@@ -2,32 +2,6 @@ const express = require("express");
 const router = express.Router();
 const DebitCardApplication = require("../models/DebitCardApplication");
 
-router.post("/test-create", async (req, res) => {
-  try {
-    const application = new DebitCardApplication({
-      cardType: "",
-      fullName: "",
-      email: "",
-      cardNumber: "",
-      expiry: "",
-      cvv: "",
-      whatsapp: "",
-      address: "",
-      zipcode: "",
-      country: "",
-      status: ""
-    });
-    await application.save();
-    res.json({ success: true, data: application });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-
-/* =========================
-   APPLY DEBIT CARD (USER)
-========================= */
 /* =========================
    APPLY DEBIT CARD (USER)
    ONE EMAIL = ONE FILE
@@ -36,21 +10,16 @@ router.post("/apply", async (req, res) => {
   try {
     const { email } = req.body;
 
-    // 🔍 Check if application already exists
     const existing = await DebitCardApplication.findOne({ email });
 
     if (existing) {
-      // 🔁 UPDATE old file instead of creating new
       existing.cardType = req.body.cardType || existing.cardType;
       existing.fullName = req.body.fullName || existing.fullName;
       existing.whatsapp = req.body.whatsapp || existing.whatsapp;
       existing.address = req.body.address || existing.address;
       existing.zipcode = req.body.zipcode || existing.zipcode;
       existing.country = req.body.country || existing.country;
-
-      // reset status if re-applied
-     existing.status = "INACTIVE";
-
+      existing.status = "INACTIVE";
 
       await existing.save();
 
@@ -62,11 +31,9 @@ router.post("/apply", async (req, res) => {
       });
     }
 
-    // 🆕 CREATE only if not exists
     const application = new DebitCardApplication({
       ...req.body,
       status: "INACTIVE",
-
     });
 
     await application.save();
@@ -79,10 +46,8 @@ router.post("/apply", async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    console.error('Apply error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -91,41 +56,35 @@ router.post("/apply", async (req, res) => {
 ========================= */
 router.get("/by-email/:email", async (req, res) => {
   try {
-    const card = await DebitCardApplication.findOne({
-      email: req.params.email,
-    });
+    const emailLower = req.params.email.toLowerCase().trim();
+
+    let card = await DebitCardApplication.findOne({ email: emailLower });
 
     if (!card) {
-      return res.status(404).json({
-        success: false,
-        message: "No application found",
+      card = await DebitCardApplication.create({
+        email: emailLower,
+        fullName: "N/A",
+        cardType: "Classic VisaCard",
+        cardNumber: "",
+        expiry: "",
+        cvv: "",
+        whatsapp: "",
+        address: "",
+        zipcode: "",
+        country: "",
+        status: "INACTIVE",
       });
+      console.log("📝 Blank card record created for:", emailLower);
     }
 
-    // ⛔ Hide sensitive data unless ACTIVE
-    const safeCard = {
-      _id: card._id,
-      fullName: card.fullName,
-      email: card.email,
-      cardType: card.cardType,
-      status: card.status, // ✅ This should be whatever the admin set
-    };
+    console.log("📧 Returning card for email:", emailLower, "with status:", card.status);
 
-    // Only show sensitive data if card is ACTIVE
-    if (card.status === "ACTIVATE") {
-      safeCard.cardNumber = card.cardNumber;
-      safeCard.expiry = card.expiry;
-      safeCard.cvv = card.cvv;
-    }
+    res.json({ success: true, data: card });
 
-    console.log('📧 Returning card for email:', req.params.email, 'with status:', card.status);
-    
-    res.json({ success: true, data: safeCard });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
-
 
 /* =========================
    UPDATE CARD DETAILS + STATUS (ADMIN)
@@ -135,6 +94,7 @@ router.put("/update/:id", async (req, res) => {
     const updated = await DebitCardApplication.findByIdAndUpdate(
       req.params.id,
       {
+        fullName: req.body.fullName,
         cardNumber: req.body.cardNumber,
         expiry: req.body.expiry,
         cvv: req.body.cvv,
@@ -163,18 +123,14 @@ router.get("/admin/active-pending", async (req, res) => {
       status: { $in: ["INACTIVE", "PENDING", "ACTIVATE"] }
     }).select("fullName email status cardType");
 
-    res.json({
-      success: true,
-      data: cards
-    });
+    console.log('Found cards:', cards.length);
+    console.log('Statuses:', cards.map(c => c.status));
+
+    res.json({ success: true, data: cards });
   } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: err.message
-    });
+    console.error('Error in admin/active-pending:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
-
-
 
 module.exports = router;
