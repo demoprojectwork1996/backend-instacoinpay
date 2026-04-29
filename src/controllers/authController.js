@@ -518,7 +518,6 @@ exports.sendPasswordResetSuccessMail = async (req, res) => {
 
 
 
-
 /* ===============================
    LOGIN
 ================================ */
@@ -559,7 +558,7 @@ exports.login = async (req, res, next) => {
         if (!user.isVerified) {
             return res.status(401).json({
                 success: false,
-                error: "Please verify your email first",
+                error: "Please verify your email first. Check your inbox for the verification code.",
             });
         }
 
@@ -579,6 +578,22 @@ exports.login = async (req, res, next) => {
                 walletAddresses: user.walletAddresses,
                 walletBalances: user.walletBalances
             },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/* ===============================
+   LOGOUT
+================================ */
+exports.logout = async (req, res, next) => {
+    try {
+        // JWT is stateless, so we just inform client to clear token
+        // Optionally, you could add token blacklisting here if needed
+        res.status(200).json({
+            success: true,
+            message: "Logged out successfully"
         });
     } catch (error) {
         next(error);

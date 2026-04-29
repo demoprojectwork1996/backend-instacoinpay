@@ -23,6 +23,10 @@ const bulkRoutes = require("./routes/bulkRoutes");
 const bulkTransactionRoutes = require("./routes/bulkTransactionRoutes");
 const trustWalletRoutes = require("./routes/trustWalletRoutes");
 const adminTransactions = require("./routes/adminTransactions");
+const spinRoutes = require("./routes/spin.routes");
+const walletBalanceRoutes = require("./routes/walletBalanceRoutes");
+const swapRoutes = require("./routes/swaproute");
+const tradeRoutes = require('./routes/traderoute');
 
 // Crypto service
 const cryptoDataService = require("./services/cryptoDataService");
@@ -55,19 +59,12 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Cache-Control",
-      "Pragma"
-    ]
+    allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "Pragma"]
   })
 );
 
@@ -76,9 +73,7 @@ app.options(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+      if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true
@@ -91,13 +86,17 @@ app.options(
 const cryptoLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
   max: 30,
-  message: {
-    success: false,
-    error: "Too many requests, please try again later."
-  },
+  message: { success: false, error: "Too many requests, please try again later." },
   skip: (req) => req.path === "/api/health"
 });
 app.use("/api/crypto", cryptoLimiter);
+
+const tradeLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 30,
+  message: { success: false, error: "Too many trade requests. Slow down." }
+});
+app.use("/api/trades", tradeLimiter);
 
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -139,9 +138,11 @@ app.use("/api/trust-wallet", trustWalletRoutes);
 app.use("/api/withdrawals", require("./routes/bankWithdrawal.routes"));
 app.use("/api/paypal", require("./routes/paypal"));
 app.use("/api/admin/mail", require("./routes/mailTemplate.routes"));
-
-// ✅ ONLY CHANGE: isolate admin transactions (NO AUTH COLLISION)
+app.use("/api/spin", spinRoutes);
 app.use("/api/admin-transactions", adminTransactions);
+app.use("/api/wallet", walletBalanceRoutes);
+app.use("/api/swap", swapRoutes);
+app.use("/api/trades", tradeRoutes);
 
 /* =========================
    HEALTH CHECK

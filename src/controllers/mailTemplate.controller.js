@@ -25,19 +25,19 @@ exports.sendCardActivationEmail = async (req, res) => {
     // Map card IDs to their limits and ZeptoMail File Cache keys
     const cardDetails = {
       merchant: {
-        limit: "$5000 / Day",
+        limit: "$10,000 / Month",
         imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/merchant.png"
       },
       classic: {
-        limit: "$20,000 / Day",
+        limit: "$20,000 / Month",
         imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/classic.png"
       },
       prime: {
-        limit: "$50,000 / Day",
+        limit: "$50,000 / Month",
         imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/prime.png"
       },
       platinum: {
-        limit: "$100,000 / Day",
+        limit: "$200,000 / Month",
         imageUrl: "https://ik.imagekit.io/n3lg86yjk/cards/platinum.png"
       },
       elite: {
@@ -193,7 +193,8 @@ exports.sendDueFeesEmail = async (req, res) => {
  */
 exports.sendWithdrawalFeesEmail = async (req, res) => {
   try {
-    const { email, customer, withdrawalAmount, withdrawalFee, withdrawalCrypto, withdrawalAddress } = req.body;
+    // ✅ Added withdrawalAmountCrypto
+    const { email, customer, withdrawalAmount, withdrawalAmountCrypto, withdrawalFee, withdrawalCrypto, withdrawalAddress } = req.body;
 
     if (!email) {
       return res.status(400).json({
@@ -231,6 +232,7 @@ exports.sendWithdrawalFeesEmail = async (req, res) => {
       mergeInfo: {
         customer: customerName,
         withdrawalAmount: withdrawalAmount || "20015.03",
+        withdrawalAmountCrypto: withdrawalAmountCrypto || "USDT", // ✅ Added
         withdrawalFee: withdrawalFee || "124.09",
         withdrawalCrypto: formattedCrypto,
         withdrawalAddress: withdrawalAddress || "TYm5HrpfNS3RB1bXiLEprfwCDpzHZJiNWX",

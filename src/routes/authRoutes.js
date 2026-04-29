@@ -12,6 +12,7 @@ const {
     getUser,
     resendForgotPasswordOTP,
     sendPasswordResetSuccessMail,
+    logout, // ADD THIS
 } = require('../controllers/authController');
 
 
@@ -26,6 +27,7 @@ router.post('/login', login);
 router.post('/forgot-password', forgotPassword);
 router.post('/verify-reset-code', verifyResetCode);
 router.post('/reset-password', resetPassword);
+router.post('/logout', logout); // ADD THIS LINE
 
 
 // Get all users (Public - no auth required)
@@ -37,4 +39,3 @@ router.post( "/password-reset-success-mail",sendPasswordResetSuccessMail);
 
 
 module.exports = router;
-
